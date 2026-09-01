@@ -2850,6 +2850,7 @@ static void http_server(int port) {
         std::string R(req, req + n);
 
         std::string body, ctype = "application/json; charset=utf-8";
+        const char* status = "200 OK";
         if (R.rfind("GET /stats", 0) == 0) {
             body = json_stats();
         } else if (R.rfind("GET /pause", 0) == 0) {
@@ -2905,13 +2906,17 @@ static void http_server(int port) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
             body = "{\"saved\":1}";
         } else {
-            body = PAGE; ctype = "text/html; charset=utf-8";
+            // فقط ریشه داشبورد را می‌دهد؛ هر مسیر دیگری واقعاً 404 است.
+            bool root = (R.rfind("GET / ", 0) == 0) || (R.rfind("GET /?", 0) == 0)
+                     || (R.rfind("GET /index.html", 0) == 0);
+            if (root) { body = PAGE; ctype = "text/html; charset=utf-8"; }
+            else      { status = "404 Not Found"; body = "{\"error\":\"not found\"}"; }
         }
         char hdr[512];
         int hl = snprintf(hdr, sizeof hdr,
-            "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
+            "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
             "Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\n"
-            "Connection: close\r\n\r\n", ctype.c_str(), body.size());
+            "Connection: close\r\n\r\n", status, ctype.c_str(), body.size());
         send(c, hdr, (int)hl, MSG_NOSIGNAL);
         send(c, body.data(), (int)body.size(), MSG_NOSIGNAL);
         close_sock(c);
@@ -2946,16 +2951,45 @@ static void open_browser(int port) {
 #endif
 }
 
+static void print_usage(const char* exe) {
+    printf(
+        "\n"
+        "  smile — فاز ۲ (نسخه CPU)\n"
+        "\n"
+        "  usage: %s [options]\n"
+        "\n"
+        "    --neurons N            تعداد نورون‌ها (پیش‌فرض 32000)\n"
+        "    --port N               پورت داشبورد (پیش‌فرض 8420)\n"
+        "    --seed N               بذر تصادفی (پیش‌فرض 12345)\n"
+        "    --load FILE            بارگذاری چک‌پوینت مشخص (پیش‌فرض brain.dat)\n"
+        "    --headless N           اجرای بدون داشبورد به مدت N ثانیه مجازی\n"
+        "    --speed N              سرعت زمان مجازی در هزارم (1000 = بلادرنگ)\n"
+        "    --no-browser           مرورگر را خودکار باز نکن\n"
+        "    --threads N            تعداد نخ‌های کاری\n"
+        "    --cpu N                سقف مصرف CPU بین 10 تا 100 درصد\n"
+        "    --words FILE           دیکشنری پایه (پیش‌فرض persian_words.tsv)\n"
+        "    --user-words FILE      واژه‌های شخصی (پیش‌فرض my_words.tsv)\n"
+        "    --teacher MODE         off | spelling | dictionary | combined\n"
+        "    --teacher-strength N   قدرت معلم خودکار 0 تا 100 (پیش‌فرض 0)\n"
+        "    -h, --help             همین راهنما\n"
+        "\n"
+        "  example: %s --neurons 32000 --port 8420 --words persian_words.tsv\n"
+        "\n",
+        exe, exe);
+}
+
 int main(int argc, char** argv) {
     console_utf8();
     int  N = 32000, port = 8420, headless_s = 0;
     u64  seed = 12345;
     const char* loadf = nullptr;
+    const char* exe_name = (argc > 0 && argv[0] && *argv[0]) ? argv[0] : "smile";
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto nxt = [&]() -> const char* { return (i + 1 < argc) ? argv[++i] : "0"; };
-        if      (a == "--neurons") N = atoi(nxt());
+        if      (a == "--help" || a == "-h") { print_usage(exe_name); return 0; }
+        else if (a == "--neurons") N = atoi(nxt());
         else if (a == "--port")    port = atoi(nxt());
         else if (a == "--seed")    seed = (u64)atoll(nxt());
         else if (a == "--load")    loadf = nxt();
@@ -2974,6 +3008,11 @@ int main(int argc, char** argv) {
                     (v == "spelling") ? 1 : (v == "dictionary") ? 2 :
                     (v == "combined") ? 3 : atoi(v.c_str());
             g_teacher_mode.store(std::max(0, std::min(3, m)));
+        }
+        else {
+            fprintf(stderr, "\n  [!] گزینه ناشناخته: %s\n", a.c_str());
+            fprintf(stderr, "      برای راهنما: %s --help\n\n", exe_name);
+            return 2;
         }
     }
 

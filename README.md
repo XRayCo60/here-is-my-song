@@ -14,7 +14,8 @@ Temporary anonymous compute prototype for a local CPU/CUDA validation run.
 
 ## Persian dictionary and personal suggestions
 
-The base file is human-readable and alphabetically sorted:
+The base file is human-readable and sorted with Persian letter collation
+(`آ ا ب پ ت ث ج چ ح خ د ذ ر ز ژ س ش ص ض ط ظ ع غ ف ق ک گ ل م ن و ه ی`):
 
 ```text
 word<TAB>frequency<TAB>status<TAB>source_or_note
@@ -113,6 +114,20 @@ A thermal guard reduces duty at 85°C and stops at 90°C.
 
 This is not a matrix-multiplication stress test. It validates the mass-neuron CUDA architecture. The first CUDA run intentionally does **not** replace the complete CPU application yet: teacher scoring, exact causal feedback, dashboard and CPU↔giant signal exchange stay in `smile.cpp` until the hardware test confirms kernel correctness and throughput.
 
+## Command-line help
+
+Both binaries print their options and exit:
+
+```bash
+./smile --help
+./smile-gpu --help
+```
+
+An unknown option is a hard error (exit code 2) instead of being silently ignored.
+
+The dashboard serves the page only on `/` and `/index.html`; every other unknown path
+returns a real `404`.
+
 ## CPU fallback
 
 The full 32k CPU application is now the default while no strong GPU test machine is available:
@@ -153,3 +168,10 @@ nvcc --version
 ```
 
 and the full `smile-gpu.exe` console output. The critical fields are GPU utilization, virtual speed, signal drops, temperature and compute capability.
+
+## Licensing
+
+`persian_words.tsv` is derived from the Lilak dictionary (Apache-2.0) and from
+subtitle frequencies (CC BY-SA 4.0). Attribution and the resulting obligations are
+recorded in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). The project's own
+source files still have no declared license — add a `LICENSE` file before publishing.
