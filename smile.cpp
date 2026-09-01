@@ -110,6 +110,20 @@ static constexpr int MOUTH_COUNT = 14;            // نورون‌های متص�
 static constexpr int EAR_COUNT   = 48;            // نورون‌های گیرنده‌ی ورودی انسان
 static constexpr int MIRROR_COUNT= 48;            // نورون‌های گیرنده‌ی آینه
 
+// --- پله‌ی اول یادگیری: سیم‌کشی مجدد پولی + انتخاب واقعی (فلگ --rewire) ------
+//
+//  بند ۱۰ سند: «تغییر مسیر — با مانای معمولی: یکی‌یکی و پولی».
+//  مانای طلایی همان کار را رایگان و دسته‌جمعی می‌کند و به فاز بعد مربوط است.
+//  اینجا فقط نسخه‌ی پولیِ تک‌یالی پیاده شده، به‌علاوه‌ی فشار انتخابی که
+//  خرید بد را حذف می‌کند. بدون مرگ واقعی، سیم‌کشی مجدد فقط نویز است.
+static constexpr i64   REWIRE_COST    = 3 * MANA;   // هزینه‌ی جابه‌جایی یک یال
+static constexpr vtime REWIRE_TICK    = 1 * SEC;    // فاصله‌ی دورهای بازبینی
+static constexpr i64   REWIRE_PPT     = 20;         // سقف ۲٪ جمعیت در هر دور
+static constexpr i32   EDGE_WORTH_CAP = 30000;      // اشباع اعتبار یال
+static constexpr i64   STARVE_PCT     = 5;          // فقط ۵٪ ته جدول اعتبار گرسنه می‌مانند
+static constexpr i64   STRESS_PCT     = 60;         // استخر زیر ۶۰٪ هدف = قحطی
+static constexpr int   TRACE_EDGE_MAX = 256;        // سقف نورون‌های ردپا برای رسید یالی
+
 static constexpr vtime REFRACTORY = 40 * MS;      // دوره‌ی تعلیق پس از هر فایر (ضد اسپم)
 static constexpr vtime SYS_TICK   = 50 * MS;      // سیستم‌تیک: درآمد، مالیات، مرگ
 static constexpr vtime EDGE_MIN   = 1 * MS;
@@ -189,6 +203,7 @@ struct Edge {
     u32   dst;
     u8    line;
     vtime delay;
+    i32   worth = 0;      // رسید علّی این یال: مثبت = در واژه‌های خوب نقش داشته
 };
 
 struct Neuron {
@@ -198,6 +213,7 @@ struct Neuron {
     u8   state  = S_HEALTHY;
     u8   half   = 0;                 // نیمه‌ی الف/ب لوب ورودی
     u8   is_mouth = 0;               // آیا به خروجی واقعی وصل است؟ (بند ۲۴)
+    u8   starved  = 0;               // ته جدول اعتبار در قحطی (فقط با --rewire)
     u8   is_ear   = 0;               // آیا ورودی بیرونی می‌گیرد؟ (بند ۲۶)
     i32  x = 0, y = 0;               // مختصات — برای سیم‌کشی محلی‌گرا (بند ۱۲٫۳)
 
@@ -410,6 +426,11 @@ struct Brain {
     i64                  words_auto   = 0;
     i64                  words_manual = 0;
     i64                  words_exact  = 0;
+    i64                  words_held   = 0;    // واژه‌های کنارگذاشته‌شده (سنجش تعمیم)
+    i64                  rewires      = 0;    // تعداد یال‌های خریداری‌شده
+    i64                  rewire_spend = 0;    // مانای سوخته برای سیم‌کشی
+    vtime                next_rewire  = 0;
+    size_t               rewire_cursor = 0;
     i64                  words_positive = 0;
     i64                  words_negative = 0;
     i64                  words_neutral  = 0;
@@ -453,6 +474,10 @@ static std::atomic<int>  g_teacher_mode{3};
 static std::atomic<int>  g_teacher_strength{0};  // پیش‌فرض فقط داوری؛ آموزش خودکار هنوز A/B را نبرده
 static std::string       g_words_path = "persian_words.tsv";
 static std::string       g_user_words_path = "my_words.tsv";
+
+// --- پله‌ی اول: سیم‌کشی مجدد پولی و کنارگذاری واژه برای سنجش صادقانه ---
+static std::atomic<int>  g_rewire{0};    // ۰ خاموش (پیش‌فرض) · ۱ روشن
+static std::atomic<int>  g_holdout{0};   // درصد واژه‌های کنارگذاشته از پاداش
 
 struct PendingFeedback {
     std::vector<u32> trace;
@@ -1006,6 +1031,8 @@ static void apply_pending_feedback() {
     for (const PendingFeedback& fb : pending) {
         double mag = std::log(1.0 + std::fabs((double)fb.milli) / MANA) / std::log(11.0);
         int sign = fb.milli >= 0 ? 1 : -1;
+        const bool edge_credit = g_rewire.load(std::memory_order_relaxed) != 0;
+        int seen = 0;
         for (u32 id : fb.trace) {
             if (id >= B.n.size() || B.n[id].state == S_DEAD) continue;
             Neuron& nu = B.n[id];
@@ -1019,6 +1046,26 @@ static void apply_pending_feedback() {
             i64 pdelta = (i64)std::llround(2500.0 * mag * lobe_weight) * sign;
             i64 pnext = (i64)nu.plasticity + pdelta;
             nu.plasticity = (i16)std::max<i64>(-8192, std::min<i64>(8192, pnext));
+
+            // رسید علّی روی خودِ یال (پله‌ی اول). plasticity فقط سرعت نورون
+            // را عوض می‌کند؛ برای اینکه تجربه بتواند «چه‌کسی به چه‌کسی وصل
+            // است» را عوض کند، باید بدانیم کدام یال در این واژه نقش داشت.
+            if (edge_credit && seen < TRACE_EDGE_MAX) {
+                ++seen;
+                i32 ew = (i32)std::llround(1200.0 * mag * lobe_weight) * sign;
+                for (size_t li = 0; li < nu.in_src.size(); ++li) {
+                    u32 src = nu.in_src[li];
+                    if (src == NO_NEURON || src >= B.n.size()) continue;
+                    if (nu.in_at[li] < 0) continue;
+                    for (Edge& e : B.n[src].out) {
+                        if (e.dst != id || e.line != (u8)li) continue;
+                        i64 nw = (i64)e.worth + ew;
+                        e.worth = (i32)std::max<i64>(-EDGE_WORTH_CAP,
+                                        std::min<i64>(EDGE_WORTH_CAP, nw));
+                        break;
+                    }
+                }
+            }
         }
     }
 }
@@ -1041,6 +1088,98 @@ static void deliver(u32 dst, u8 line, u8 bit, u32 source = NO_NEURON) {
 
 // ارزیاب جداگانه‌ی تک‌نخ حذف شد؛ neuron_eval_mt با Worker صفر همان مسیر را
 // برای یک نخ هم اجرا می‌کند و داشتن دو نسخه باعث واگرایی باگ‌ها می‌شد.
+
+// ---------------------------------------------------------------------------
+//  سیم‌کشی مجدد پولی (بند ۱۰: «با مانای معمولی — یکی‌یکی و پولی»)
+//
+//  قاعده کاملاً محلی است و هیچ ناظری ندارد:
+//    ۱. نورون فقط وقتی اقدام می‌کند که یالی با رسید منفی داشته باشد،
+//       یعنی یالی که مکرراً در واژه‌های تنبیه‌شده نقش داشته.
+//    ۲. باید پولش را داشته باشد. نورون بی‌اعتبار درآمد ندارد، پس عملاً
+//       حق آزمودن ندارد — دقیقاً همان فشار اقتصادی مورد نظر سند.
+//    ۳. هزینه سوخته و از راه ترانزیت به چرخه برمی‌گردد (بند ۵٫۲).
+//  انتخاب مقصد تصادفیِ محلی‌گراست؛ کیفیتش را انتخاب طبیعی تعیین می‌کند،
+//  نه یک تابع هدف سراسری.
+// ---------------------------------------------------------------------------
+static u32 pick_local_target(const Neuron& src) {
+    Neuron& s = B.n[src.id];
+    u32 best = s.rng.below((u32)B.n.size());
+    i64 bd = INT64_MAX;
+    for (int k = 0; k < 6; ++k) {
+        u32 c = s.rng.below((u32)B.n.size());
+        if (c == src.id) continue;
+        i64 dx = B.n[c].x - src.x, dy = B.n[c].y - src.y;
+        i64 dd = dx * dx + dy * dy;
+        if (dd < bd) { bd = dd; best = c; }
+    }
+    return best;
+}
+
+// ---------------------------------------------------------------------------
+//  علامت‌گذاری گرسنگان: در قحطی، فقط ۵٪ پایین جدول اعتبارِ هر لوب سهم
+//  نمی‌گیرند. رتبه‌ای بودن آستانه سه خاصیت دارد:
+//    ۱. مستقل از مقیاس مطلق اعتبار است، پس در ابتدای کار که همه صفرند
+//       هم دقیقاً ۵٪ را می‌گیرد، نه همه را.
+//    ۲. نرخ مرگ ذاتاً کران‌دار است — همان چیزی که بند ۶ می‌خواست.
+//    ۳. عضویت می‌چرخد؛ فقط نورونی می‌میرد که پایدارانه بی‌فایده باشد.
+//  تساوی‌ها با شناسه شکسته می‌شوند تا اجرا تکرارپذیر بماند (بند ۱۲٫۹).
+// ---------------------------------------------------------------------------
+static void starvation_pass() {
+    static std::vector<std::pair<u32,u32>> rank;   // (credit, id)
+    for (int L = 0; L < N_LOBES; ++L) {
+        const LobePool& P = B.lp[L];
+        bool famine = P.target > 0 && P.pool * 100 < P.target * STRESS_PCT;
+        rank.clear();
+        for (const auto& nu : B.n)
+            if (nu.lobe == L && nu.state != S_DEAD && nu.state != S_SPAM)
+                rank.push_back({nu.credit, nu.id});
+        if (!famine || rank.empty()) {
+            for (auto& pr : rank) B.n[pr.second].starved = 0;
+            continue;
+        }
+        size_t k = (size_t)((i64)rank.size() * STARVE_PCT / 100);
+        for (auto& pr : rank) B.n[pr.second].starved = 0;
+        if (!k) continue;
+        std::nth_element(rank.begin(), rank.begin() + k, rank.end());
+        for (size_t i = 0; i < k; ++i) B.n[rank[i].second].starved = 1;
+    }
+}
+
+static void rewire_pass() {
+    if (!g_rewire.load(std::memory_order_relaxed)) return;
+    if (B.now < B.next_rewire) return;
+    B.next_rewire = B.now + REWIRE_TICK;
+
+    const size_t n = B.n.size();
+    if (!n) return;
+    i64 budget = std::max<i64>(1, (i64)n * REWIRE_PPT / 1000);
+
+    for (size_t scanned = 0; scanned < n && budget > 0; ++scanned) {
+        Neuron& nu = B.n[B.rewire_cursor++ % n];
+        if (nu.kind != K_NORMAL)   continue;      // غول و حافظه‌ای: فاز بعد
+        if (nu.state == S_DEAD || nu.state == S_SPAM) continue;
+        if (nu.out.empty())        continue;
+        if (nu.mana < REWIRE_COST) continue;      // پولش را ندارد
+
+        size_t worst = 0;
+        for (size_t k = 1; k < nu.out.size(); ++k)
+            if (nu.out[k].worth < nu.out[worst].worth) worst = k;
+        if (nu.out[worst].worth >= 0) continue;   // یال زیان‌ده ندارد → راضی است
+
+        u32 dst = pick_local_target(nu);
+        if (dst == nu.id || dst >= n) continue;
+        if (B.n[dst].kind == K_GIANT)  continue;  // غول فقط از نخبه‌ها می‌شنود
+        if (B.n[dst].state == S_DEAD)  continue;
+
+        nu.mana -= REWIRE_COST;
+        B.transit.push_back({B.now + TRANSIT_TIME, REWIRE_COST});
+        B.transit_total += REWIRE_COST;
+        nu.out[worst] = Edge{dst, (u8)nu.rng.below((u32)B.n[dst].lines()),
+                             nu.rng.range(EDGE_MIN, EDGE_MAX), 0};
+        B.rewires++; B.rewire_spend += REWIRE_COST;
+        --budget;
+    }
+}
 
 static void system_tick() {
     // --- بازگشت مانای در ترانزیت (بند ۵٫۲) ---
@@ -1164,6 +1303,12 @@ static void system_tick() {
     i64 rw = g_reward_pending.exchange(0);
     if (rw) apply_reward(rw);
 
+    // پس از اعمال رسیدها: اول رتبه‌بندی گرسنگان، سپس سیم‌کشی مجدد —
+    // هر دو با تازه‌ترین اعتبار تصمیم می‌گیرند.
+    if (g_rewire.load(std::memory_order_relaxed) && B.now >= B.next_rewire)
+        starvation_pass();
+    rewire_pass();
+
     B.push(B.now + SYS_TICK, 0, EV_SYS);
 }
 
@@ -1219,6 +1364,7 @@ struct TeacherLexicon {
     std::unordered_set<std::string> verified;
     std::unordered_set<std::string> suggested;
     std::unordered_set<std::string> blocked;
+    std::unordered_set<std::string> held;   // کنارگذاشته: نه پاداش، نه n-gram
     std::vector<u64> bigram = std::vector<u64>((size_t)TEACH_V * TEACH_V, 0);
     std::vector<u64> trigram = std::vector<u64>((size_t)TEACH_V * TEACH_V * TEACH_V, 0);
     u64 max_freq = 1;
@@ -1268,6 +1414,7 @@ static bool word_symbols(const std::string& word, std::vector<int>& out) {
 static bool load_teacher_data(const std::string& path) {
     g_lexicon.freq.clear(); g_lexicon.verified.clear();
     g_lexicon.suggested.clear(); g_lexicon.blocked.clear();
+    g_lexicon.held.clear();
     g_lexicon.freq.reserve(120000); g_lexicon.verified.reserve(120000);
     std::fill(g_lexicon.bigram.begin(), g_lexicon.bigram.end(), 0);
     std::fill(g_lexicon.trigram.begin(), g_lexicon.trigram.end(), 0);
@@ -1333,6 +1480,23 @@ static bool load_teacher_data(const std::string& path) {
     }
     load_file(user, false);
 
+    // --- کنارگذاری برای سنجش صادقانه (--holdout) ---------------------------
+    //  معلم هم پاداش می‌دهد و هم نمره می‌سنجد؛ با همان واژه‌نامه. پس «نرخ
+    //  واژه‌ی دقیق» می‌تواند صرفاً حفظ‌کردن چند رشته‌ی پاداش‌گرفته باشد.
+    //  درصدی از واژه‌ها از verified و از مدل n-gram بیرون کشیده می‌شود:
+    //  مغز هرگز برایشان پاداش نمی‌گیرد و هرگز الگویشان را نمی‌بیند. اگر
+    //  باز هم تولیدشان کند، ساختار واژه را یاد گرفته، نه فهرست را.
+    int hp = g_holdout.load();
+    if (hp > 0) {
+        hp = std::min(90, hp);
+        for (const std::string& w : g_lexicon.verified) {
+            u64 h = 1469598103934665603ull;                 // FNV-1a، قطعی
+            for (unsigned char c : w) { h ^= c; h *= 1099511628211ull; }
+            if ((int)(h % 100) < hp) g_lexicon.held.insert(w);
+        }
+        for (const std::string& w : g_lexicon.held) g_lexicon.verified.erase(w);
+    }
+
     // فقط واژه‌های verified مدل املایی را می‌سازند. frequency وزن است، نه
     // مدرک اعتبار؛ عضویت را واژه‌نامه‌ی curated تعیین می‌کند.
     std::vector<int> seq;
@@ -1357,6 +1521,7 @@ struct JudgeResult {
     int spelling = 0;
     int dictionary = 0;
     bool exact = false;
+    bool held  = false;          // عضو مجموعه‌ی کنارگذاشته (بدون پاداش)
     std::string normalized;
 };
 
@@ -1386,6 +1551,7 @@ static JudgeResult judge_word(const std::string& raw, int mode) {
     // frequency دیگر رأی اعتبار نیست. فقط عضویت curated/verified حق پاداش
     // دیکشنری می‌دهد؛ suggested بی‌اثر و blocked حتی از پایه حذف است.
     R.exact = it != g_lexicon.freq.end() && g_lexicon.verified.count(w) != 0;
+    R.held  = !g_lexicon.held.empty() && g_lexicon.held.count(w) != 0;
 
     std::vector<int> q; q.reserve(a.size()+2);
     q.push_back(TEACH_BOUNDARY); q.insert(q.end(), a.begin(), a.end()); q.push_back(TEACH_BOUNDARY);
@@ -1500,6 +1666,7 @@ static void device_close_word() {
         w.exact = J.exact;
         B.quality_sum += J.quality;
         if (J.exact) B.words_exact++;
+        if (J.held)  B.words_held++;
 
         // مزیت نسبت به خط پایه‌ی متحرک: حتی پیش از ساخت اولین واژه‌ی کامل،
         // الگوهای «کمتر بد» پاداش می‌گیرند. میانگین‌گیری جلوی تورم مانا را می‌گیرد.
@@ -1663,7 +1830,7 @@ static void device_score(u32 word_id, int score) {
 static bool save_brain(const char* path) {
     FILE* f = fopen(path, "wb");
     if (!f) return false;
-    const char magic[8] = {'S','M','I','L','E','0','0','5'};
+    const char magic[8] = {'S','M','I','L','E','0','0','6'};
     fwrite(magic, 1, 8, f);
     u32 nprog = (u32)g_progs.size(); fwrite(&nprog, 4, 1, f);
     for (auto& p : g_progs) {
@@ -1689,7 +1856,8 @@ static bool save_brain(const char* path) {
         u32 msz = (u32)nu.mem.size(); fwrite(&msz, 4, 1, f);
         fwrite(nu.mem.data(), 1, msz, f);
         u32 esz = (u32)nu.out.size(); fwrite(&esz, 4, 1, f);
-        for (auto& e : nu.out) { fwrite(&e.dst,4,1,f); fwrite(&e.line,1,1,f); fwrite(&e.delay,8,1,f); }
+        for (auto& e : nu.out) { fwrite(&e.dst,4,1,f); fwrite(&e.line,1,1,f);
+                                 fwrite(&e.delay,8,1,f); fwrite(&e.worth,4,1,f); }
     }
     for (int L = 0; L < N_LOBES; ++L) {
         fwrite(&B.lp[L].pool, 8, 1, f);
@@ -1703,13 +1871,16 @@ static bool load_brain(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) return false;
     char magic[8];
-    const char current_magic[8] = {'S','M','I','L','E','0','0','5'};
+    const char current_magic[8] = {'S','M','I','L','E','0','0','6'};
+    const char v5_magic[8]      = {'S','M','I','L','E','0','0','5'};
     const char v4_magic[8]      = {'S','M','I','L','E','0','0','4'};
     if (fread(magic,1,8,f) != 8 ||
-        (memcmp(magic,current_magic,8) && memcmp(magic,v4_magic,8))) {
+        (memcmp(magic,current_magic,8) && memcmp(magic,v5_magic,8) &&
+         memcmp(magic,v4_magic,8))) {
         fclose(f); return false;
     }
-    bool has_plasticity = memcmp(magic,current_magic,8) == 0;
+    bool has_worth      = memcmp(magic,current_magic,8) == 0;
+    bool has_plasticity = has_worth || memcmp(magic,v5_magic,8) == 0;
     u32 nprog = 0; if (fread(&nprog,4,1,f)!=1) { fclose(f); return false; }
     g_progs.clear(); g_progs.resize(nprog);
     for (u32 i = 0; i < nprog; ++i) {
@@ -1737,7 +1908,10 @@ static bool load_brain(const char* path) {
         u32 msz=0; fread(&msz,4,1,f); nu.mem.resize(msz);
         if (msz) fread(nu.mem.data(),1,msz,f);
         u32 esz=0; fread(&esz,4,1,f); nu.out.resize(esz);
-        for (u32 k=0;k<esz;++k){ fread(&nu.out[k].dst,4,1,f); fread(&nu.out[k].line,1,1,f); fread(&nu.out[k].delay,8,1,f); }
+        for (u32 k=0;k<esz;++k){ fread(&nu.out[k].dst,4,1,f); fread(&nu.out[k].line,1,1,f);
+                                 fread(&nu.out[k].delay,8,1,f);
+                                 if (has_worth) fread(&nu.out[k].worth,4,1,f);
+                                 else nu.out[k].worth = 0; }
         nu.in_at.assign(KIND_LINES[nu.kind], -1);
         nu.in_src.assign(KIND_LINES[nu.kind], NO_NEURON);
         nu.last_eval = B.now;
@@ -1906,6 +2080,12 @@ static void neuron_eval_mt(u32 id, Worker& W, vtime now) {
         i64 want = nu.cap - nu.mana;
         i64 share = 15 + std::min<i64>(85, (i64)nu.credit / 180);
         i64 ask = want * share / 100;
+        // کمیابی واقعی: تا پیش از این نورون هرچه می‌خواست برمی‌داشت و
+        // استخر فقط تا صفر خالی می‌شد، پس last_income همیشه تازه بود و
+        // هیچ‌کس گرسنه نمی‌ماند (dead=0 در همه‌ی اجراها). در قحطی، ته
+        // جدولِ اعتبارِ همان لوب سهمی نمی‌گیرد — آستانه رتبه‌ای است نه
+        // مطلق، پس خودش را محدود می‌کند و موج مرگ نمی‌سازد (بند ۶).
+        if (nu.starved) ask = 0;
         if (ask > 0) { W.pool_draw[nu.lobe] += ask; nu.mana += ask; nu.last_income = now; }
     }
 
@@ -2971,6 +3151,9 @@ static void print_usage(const char* exe) {
         "    --user-words FILE      واژه‌های شخصی (پیش‌فرض my_words.tsv)\n"
         "    --teacher MODE         off | spelling | dictionary | combined\n"
         "    --teacher-strength N   قدرت معلم خودکار 0 تا 100 (پیش‌فرض 0)\n"
+        "    --talk N               پرحرفی ۱۰ تا ۴۰۰ درصد (پیش‌فرض 100)\n"
+        "    --rewire               پله‌ی اول: سیم‌کشی مجدد پولی + انتخاب واقعی (پیش‌فرض خاموش)\n"
+        "    --holdout N            N درصد واژه‌ها از پاداش کنار گذاشته شوند (سنجش تعمیم)\n"
         "    -h, --help             همین راهنما\n"
         "\n"
         "  example: %s --neurons 32000 --port 8420 --words persian_words.tsv\n"
@@ -3000,6 +3183,9 @@ int main(int argc, char** argv) {
         else if (a == "--cpu")        g_cpu_percent.store(std::max(10, std::min(100, atoi(nxt()))));
         else if (a == "--words")      g_words_path = nxt();
         else if (a == "--user-words") g_user_words_path = nxt();
+        else if (a == "--rewire")     g_rewire.store(1);
+        else if (a == "--talk")       g_talkativeness.store(std::max(10, std::min(400, atoi(nxt()))));
+        else if (a == "--holdout")    g_holdout.store(std::max(0, std::min(90, atoi(nxt()))));
         else if (a == "--teacher-strength")
             g_teacher_strength.store(std::max(0, std::min(100, atoi(nxt()))));
         else if (a == "--teacher") {
@@ -3118,6 +3304,29 @@ int main(int argc, char** argv) {
             printf("  پلاستیسیته: avg=%+.2f positive=%lld negative=%lld\n",
                    (double)psum / std::max<size_t>(1, B.n.size()),
                    (long long)ppos, (long long)pneg);
+        }
+        // خط ماشین‌خوان برای هارنس A/B — قالب ثابت، مقادیر با فاصله
+        {
+            size_t k = std::min<size_t>(10, B.words.size());
+            double q_last = 0;
+            for (size_t i = 0; i < k; ++i) q_last += B.words[B.words.size() - k + i].quality;
+            i64 dead = 0, eworth_neg = 0;
+            for (const auto& nu : B.n) {
+                if (nu.state == S_DEAD) dead++;
+                for (const auto& e : nu.out) if (e.worth < 0) eworth_neg++;
+            }
+            printf("RESULT seed=%llu neurons=%zu rewire=%d holdout=%d "
+                   "words=%lld exact=%lld exactpct=%.4f held=%lld heldpct=%.4f "
+                   "avgQ=%.4f lastQ=%.4f dead=%lld rewires=%lld negedges=%lld\n",
+                   (unsigned long long)seed, B.n.size(),
+                   g_rewire.load(), g_holdout.load(),
+                   (long long)B.words_auto, (long long)B.words_exact,
+                   100.0 * B.words_exact / std::max<i64>(1, B.words_auto),
+                   (long long)B.words_held,
+                   100.0 * B.words_held / std::max<i64>(1, B.words_auto),
+                   B.quality_sum / std::max<i64>(1, B.words_auto),
+                   k ? q_last / k : 0.0,
+                   (long long)dead, (long long)B.rewires, (long long)eworth_neg);
         }
         save_brain("brain.dat");
         printf("\n  ذخیره شد: brain.dat\n");

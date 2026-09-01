@@ -43,6 +43,51 @@ The old implementation did not: A/B runs produced identical event fingerprints b
 
 It still did **not** win the clean-data A/B. Across three seeds (1000 neurons, 350 virtual seconds), automatic plasticity changed exact-word rate from 5.21% to 4.98% and average quality from 12.09 to 11.43; only the last-10-word quality rose slightly. Therefore automatic strength defaults to **0**: scoring and metrics remain active, but automatic behavioral modification is opt-in and experimental. This is an evaluator, not yet proven language training.
 
+## First learning rung — paid rewiring (`--rewire`)
+
+Section 33 of `ARCHITECTURE.md` in full. Short version:
+
+`plasticity` could only change *how fast* a neuron fires, never *what it connects to*.
+`--rewire` adds three things: a causal receipt on each **edge**, the ability for a neuron
+to **buy** a move of its worst edge with ordinary mana, and rank-based starvation so that
+persistently useless neurons actually die.
+
+Two structural bugs surfaced doing this:
+
+- **Selection was never firing.** Every run reported `dead: 0`. Neurons always got what they
+  asked from the lobe pool, so `last_income` never went stale and the starvation path was
+  unreachable. The mana economy was bookkeeping, not pressure.
+- **An absolute hunger threshold causes a death wave.** The first attempt killed 801 of 1000
+  neurons and produced zero words. The threshold is now rank-based (bottom 5% of a lobe's
+  credit during famine), which is self-limiting. Population now settles at ~80% and holds.
+
+`--holdout N` removes N% of the lexicon (deterministic FNV-1a split) from both the reward
+path and the n-gram model, so the exact-word rate can be checked for generalization rather
+than memorization.
+
+### A/B result: negative
+
+10 seeds, 1000 neurons, 600 virtual seconds, paired t-test (df=9, threshold 2.26):
+
+| metric | off | on | diff | t |
+|---|---|---|---|---|
+| exact-word rate % | 7.18 ± 2.24 | 6.91 ± 2.77 | −0.27 | −0.22 |
+| average quality | 11.83 ± 1.61 | 13.12 ± 2.54 | +1.29 | +1.12 |
+| held-out rate % | 0.10 | 0.00 | −0.10 | −1.48 |
+| words produced | 162.5 | 93.4 | **−69.1** | **−6.39** |
+
+The only significant effect is a 43% drop in word output. Rewiring does not improve quality;
+it makes the brain quieter. So `--rewire` defaults to **off**, like the automatic teacher.
+
+Reproduce:
+
+```bash
+bench/ab.sh 10 600 1000
+```
+
+With the flag off, the engine is bit-identical to the previous build (verified by comparing
+run fingerprints across seeds).
+
 ## CUDA test on Windows
 
 Requirements:

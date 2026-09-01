@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+#  هارنس A/B برای پله‌ی اول یادگیری
+#
+#  دو بازو را با بذرهای یکسان اجرا می‌کند و خروجی ماشین‌خوان RESULT را
+#  جمع می‌بندد:
+#     off  = رفتار فعلی برنامه (فقط plasticity)
+#     on   = --rewire : سیم‌کشی مجدد پولی + گرسنگی رتبه‌ای + مرگ واقعی
+#
+#  استفاده:
+#     bench/ab.sh [SEEDS] [SECONDS] [NEURONS]
+#  مثال:
+#     bench/ab.sh 8 600 1000
+# ---------------------------------------------------------------------------
+set -u
+cd "$(dirname "$0")/.."
+
+SEEDS=${1:-8}
+SECS=${2:-600}
+NEUR=${3:-1000}
+STRENGTH=${STRENGTH:-60}
+HOLDOUT=${HOLDOUT:-10}
+TALK=${TALK:-400}
+JOBS=${JOBS:-$(nproc 2>/dev/null || echo 2)}
+
+BIN=${BIN:-./bench/smile-bench}
+OUT=bench/results.tsv
+
+if [ ! -x "$BIN" ]; then
+  echo "build: $BIN"
+  g++ -O2 -std=c++17 -pthread smile.cpp -o "$BIN" || exit 1
+fi
+
+echo "seeds=$SEEDS seconds=$SECS neurons=$NEUR strength=$STRENGTH holdout=$HOLDOUT talk=$TALK jobs=$JOBS"
+: > "$OUT"
+
+run_one() {           # $1=seed  $2=arm(off|on)
+  local seed=$1 arm=$2 extra=""
+  [ "$arm" = on ] && extra="--rewire"
+  # هر اجرا در پوشه‌ی خودش، تا brain.dat ها روی هم نیفتند
+  local d; d=$(mktemp -d)
+  ( cd "$d" && "$OLDPWD/$BIN" --neurons "$NEUR" --headless "$SECS" --seed "$seed" \
+      --teacher-strength "$STRENGTH" --holdout "$HOLDOUT" --talk "$TALK" $extra \
+      --words "$OLDPWD/persian_words.tsv" --user-words "$OLDPWD/my_words.tsv" \
+      --no-browser 2>/dev/null ) | grep '^RESULT' | sed "s/^RESULT /arm=$arm /"
+  rm -rf "$d"
+}
+export -f run_one
+export BIN NEUR SECS STRENGTH HOLDOUT TALK OLDPWD="$PWD"
+
+for arm in off on; do
+  for s in $(seq 1 "$SEEDS"); do echo "$s $arm"; done
+done | xargs -P "$JOBS" -n 2 bash -c 'run_one "$0" "$1"' | tee "$OUT"
+
+echo
+echo "خلاصه:"
+awk '
+function mean(a,n,  i,s){s=0;for(i=1;i<=n;i++)s+=a[i];return n?s/n:0}
+function sd(a,n,m,  i,s){s=0;if(n<2)return 0;for(i=1;i<=n;i++)s+=(a[i]-m)^2;return sqrt(s/(n-1))}
+{
+  split($0,f," "); arm=""; 
+  for(i=1;i<=NF;i++){split($i,kv,"="); v[kv[1]]=kv[2]}
+  a=v["arm"]; n[a]++
+  ex[a,n[a]]=v["exactpct"]; q[a,n[a]]=v["avgQ"]; w[a,n[a]]=v["words"]
+  hd[a,n[a]]=v["heldpct"]; dd[a,n[a]]=v["dead"]; rw[a,n[a]]=v["rewires"]
+}
+END{
+  printf "%-5s %3s %14s %14s %10s %8s %8s\n","arm","n","exact%","avgQ","words","held%","dead"
+  for(k=1;k<=2;k++){
+    a=(k==1?"off":"on"); if(!n[a])continue
+    for(i=1;i<=n[a];i++){E[i]=ex[a,i];Q[i]=q[a,i];W[i]=w[a,i];H[i]=hd[a,i];D[i]=dd[a,i]}
+    me=mean(E,n[a]); mq=mean(Q,n[a]); mw=mean(W,n[a]); mh=mean(H,n[a]); md=mean(D,n[a])
+    printf "%-5s %3d %7.2f±%-6.2f %7.2f±%-6.2f %10.1f %8.2f %8.1f\n", \
+      a,n[a],me,sd(E,n[a],me),mq,sd(Q,n[a],mq),mw,mh,md
+  }
+}' "$OUT"
