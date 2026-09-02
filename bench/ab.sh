@@ -78,16 +78,19 @@ function sd(a,n,m,  i,s){s=0;if(n<2)return 0;for(i=1;i<=n;i++)s+=(a[i]-m)^2;retu
   ex[a,n[a]]=v["exactpct"]; q[a,n[a]]=v["avgQ"]; w[a,n[a]]=v["words"]
   hd[a,n[a]]=v["heldpct"]; dd[a,n[a]]=v["dead"]; rw[a,n[a]]=v["rewires"]
   mu[a,n[a]]=v["mutates"]; si[a,n[a]]=v["silence"]; fe[a,n[a]]=v["fed"]
+  sp[a,n[a]]=v["sprouts"]; pp[a,n[a]]=v["pop"]
 }
 END{
-  printf "%-5s %3s %14s %14s %10s %8s %8s %8s %8s %8s %8s\n","arm","n","exact%","avgQ","words","held%","dead","mut","sil","fed","rewires"
+  printf "%-5s %3s %14s %14s %10s %8s %8s %8s %8s %8s %8s %8s\n","arm","n","exact%","avgQ","words","held%","dead","mut","sil","fed","spr","pop"
   for(k=1;k<=2;k++){
     a=(k==1?"off":"on"); if(!n[a])continue
     for(i=1;i<=n[a];i++){E[i]=ex[a,i];Q[i]=q[a,i];W[i]=w[a,i];H[i]=hd[a,i];D[i]=dd[a,i]
-                         M[i]=mu[a,i];S[i]=si[a,i];F[i]=fe[a,i];R[i]=rw[a,i]}
+                         M[i]=mu[a,i];S[i]=si[a,i];F[i]=fe[a,i];R[i]=rw[a,i]
+                         P[i]=sp[a,i];O[i]=pp[a,i]}
     me=mean(E,n[a]); mq=mean(Q,n[a]); mw=mean(W,n[a]); mh=mean(H,n[a]); md=mean(D,n[a])
     mm=mean(M,n[a]); ms=mean(S,n[a]); mf=mean(F,n[a]); mr=mean(R,n[a])
-    printf "%-5s %3d %7.2f±%-6.2f %7.2f±%-6.2f %10.1f %8.2f %8.1f %8.1f %8.1f %8.1f %8.1f\n", \
-      a,n[a],me,sd(E,n[a],me),mq,sd(Q,n[a],mq),mw,mh,md,mm,ms,mf,mr
+    mp=mean(P,n[a]); mo=mean(O,n[a])
+    printf "%-5s %3d %7.2f±%-6.2f %7.2f±%-6.2f %10.1f %8.2f %8.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n", \
+      a,n[a],me,sd(E,n[a],me),mq,sd(Q,n[a],mq),mw,mh,md,mm,ms,mf,mp,mo
   }
 }' "$OUT"

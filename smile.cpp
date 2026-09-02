@@ -152,6 +152,28 @@ static constexpr vtime SILENCE_WARMUP = 30 * SEC;   // دوره‌ی ارفاق 
 static constexpr i64   SILENCE_FINE   = 2 * MANA;   // جریمه‌ی هر ثانیه‌ی سکوت
 static constexpr i64   SILENCE_POOL_FLOOR_PCT = 40; // زیر این پرشدگی، جریمه تعلیق
 
+// --- پله‌ی سوم یادگیری: مانای خاص و جوونه (فلگ --sprout N) ---
+//
+//  حلقه‌ی فرگشتی تا پیش از این ناقص بود: جهش (ورایش) و گرسنگی (انتخاب)
+//  داشتیم ولی میراث نداشتیم — نورونِ خوب نمی‌توانست از خودش کپی بگیرد و
+//  مسیر پاداش‌گرفته تقویت شود. مانای خاص همین حلقه را می‌بندد:
+//    · ذخیره‌ی جدا: «مانای خاص» (kmana) در هیچ خرید دیگری خرج نمی‌شود.
+//    · فقط مشارکت در واژه‌ی «دقیقاً درست» یک واحد می‌دهد — نه کیفیت بالا،
+//      نه پاداش مثبت؛ سیگنال دودوییِ تیز.
+//    · با رسیدن به آستانه (پیشنهاد سند: ۵ یا ۱۰)، نورون موجودی‌اش را صفر
+//      می‌کند و جوونه می‌زند: کپی از خودش می‌سازد. بدن (برنامه + سیم‌ها)
+//      میراث می‌رسد؛ رسیدها و سوابق نه — فرزند محاکمه‌ی تازه می‌گیرد.
+//    · نصف مانای معمولی والد به فرزند می‌رسد (تقسیم مثل تقسیم سلولی؛
+//      پول تازه از هیچ چاپ نمی‌شود).
+//    · فرزند دهان/گوش نمی‌شود (بند ۲۶: مغز بزرگ‌تر = پردازش عمیق‌تر،
+//      نه دهان بزرگ‌تر) و کمی کنار والد می‌نشیند.
+//  دو ترمز: حداکثر یک جوونه در هر ثانیه به ازای هر ۱۰۰۰ نورون، و سقف
+//  رشد ۲۵٪ جمعیتِ پایه. بعدها که مغز معانی را فهمید، برای کنترل حجم
+//  همین مکانیزم را می‌توان خاموش کرد (فلگ است، نه هاردکد).
+static constexpr vtime SPROUT_TICK    = 1 * SEC;
+static constexpr i64   SPROUT_GROWTH_PCT = 25;      // سقف رشد جمعیت (٪ پایه)
+static constexpr u16   KMANA_MAX      = 60000;      // اشباع ذخیره‌ی خاص
+
 static constexpr vtime REFRACTORY = 40 * MS;      // دوره‌ی تعلیق پس از هر فایر (ضد اسپم)
 static constexpr vtime SYS_TICK   = 50 * MS;      // سیستم‌تیک: درآمد، مالیات، مرگ
 static constexpr vtime EDGE_MIN   = 1 * MS;
@@ -243,6 +265,7 @@ struct Neuron {
     u8   is_mouth = 0;               // آیا به خروجی واقعی وصل است؟ (بند ۲۴)
     u8   starved  = 0;               // ته جدول اعتبار در قحطی (فقط با --rewire)
     u8   own_prog = 0;               // بایت‌کدِ خصوصی دارد؟ (جهش پله‌ی دوم؛ در چک‌پوینت از nu.prog مشتق می‌شود)
+    u16  kmana   = 0;                // مانای خاص — ذخیره‌ی جدا برای جوونه (پله‌ی سوم)
     u8   is_ear   = 0;               // آیا ورودی بیرونی می‌گیرد؟ (بند ۲۶)
     i32  x = 0, y = 0;               // مختصات — برای سیم‌کشی محلی‌گرا (بند ۱۲٫۳)
 
@@ -469,6 +492,10 @@ struct Brain {
     vtime                next_feed    = 0;    // وعده‌ی بعدی سخن گفتن معلم
     i64                  words_fed    = 0;    // واژه‌هایی که معلم خودش گفته است
     Rng                  feed_rng{1};         // بذر مستقل انتخاب واژه‌ی معلم
+    i64                  sprouts      = 0;    // جوونه‌های زده‌شده (پله‌ی سوم)
+    vtime                next_sprout  = 0;
+    size_t               sprout_cursor = 0;
+    i64                  pop_base     = 0;    // جمعیت پایه — سقف رشد از این محاسبه می‌شود
     i64                  words_positive = 0;
     i64                  words_negative = 0;
     i64                  words_neutral  = 0;
@@ -521,6 +548,7 @@ static std::atomic<int>  g_holdout{0};   // درصد واژه‌های کنار�
 static std::atomic<int>  g_mutate{0};     // ۰ خاموش (پیش‌فرض) · ۱ روشن
 static std::atomic<int>  g_silence{0};    // ۰ خاموش (پیش‌فرض) · ۱ روشن
 static std::atomic<int>  g_teach_feed{0}; // فاصله‌ی ثانیه‌ی سخن گفتن معلم؛ ۰ = خاموش
+static std::atomic<int>  g_sprout{0};     // آستانه‌ی مانای خاص برای جوونه؛ ۰ = خاموش
 static std::vector<std::string> g_feed_pool;   // واژه‌های مجازِ معلم (بدون کنارگذاشته‌ها)
 static bool                   g_feed_pool_ready = false;
 static std::vector<u32>       g_prog_free;     // جای بازیافت‌شده‌ی برنامه‌های خصوصیِ مرده‌ها
@@ -528,6 +556,7 @@ static std::vector<u32>       g_prog_free;     // جای بازیافت‌شده
 struct PendingFeedback {
     std::vector<u32> trace;
     i64 milli = 0;
+    bool exact = false;   // واژه‌ی دقیقاً درست بود؟ (سیگنال مانای خاص)
 };
 static std::mutex                  g_feedback_mx;
 static std::deque<PendingFeedback> g_feedback;
@@ -1012,11 +1041,13 @@ static void build_brain(int N, u64 seed) {
     B.c_fires_prev = 0; B.t_prev = 0;
     B.out_bits.clear(); B.out_text.clear();
 
-    // --- شمارنده‌های پله‌ی دوم ---
+    // --- شمارنده‌های پله‌ی دوم و سوم ---
     B.mutates = B.mutate_spend = 0; B.next_mutate = 0; B.mutate_cursor = 0;
     B.last_word_vt = SILENCE_WARMUP; B.silence_ticks = 0;
     B.next_feed = 0; B.words_fed = 0;
     B.feed_rng = Rng(seed ^ 0x51ED270Bull);
+    B.sprouts = 0; B.next_sprout = 0; B.sprout_cursor = 0;
+    B.pop_base = N;                     // سقف رشد جوونه از همین محاسبه می‌شود
     g_prog_free.clear();
 }
 
@@ -1085,10 +1116,18 @@ static void apply_pending_feedback() {
         double mag = std::log(1.0 + std::fabs((double)fb.milli) / MANA) / std::log(11.0);
         int sign = fb.milli >= 0 ? 1 : -1;
         const bool edge_credit = g_rewire.load(std::memory_order_relaxed) != 0;
+        // مانای خاص (پله‌ی سوم): فقط مشارکت در واژه‌ی «دقیقاً درست» یک واحد
+        // ذخیره می‌کند. دهان مستثنی است — دهان در هر واژه‌ای نقش دارد، درست
+        // یا غلط؛ سهمش از correctness نیست. این ذخیره در هیچ خرید دیگری
+        // خرج نمی‌شود، فقط جوونه.
+        const bool kmana_credit = fb.exact
+                               && g_sprout.load(std::memory_order_relaxed) > 0;
         int seen = 0;
         for (u32 id : fb.trace) {
             if (id >= B.n.size() || B.n[id].state == S_DEAD) continue;
             Neuron& nu = B.n[id];
+            if (kmana_credit && !nu.is_mouth && nu.kmana < KMANA_MAX)
+                nu.kmana++;
             double lobe_weight = nu.lobe == L_OUTPUT ? 1.0 : (nu.lobe == L_CENTRAL ? 0.65 : 0.40);
             i64 delta = (i64)std::llround(6000.0 * mag * lobe_weight) * sign;
             i64 next = (i64)nu.credit + delta;
@@ -1335,6 +1374,89 @@ static bool teacher_can_speak();
 static const std::string& teacher_pick_word();
 static void encode_to_input(const std::string& text);
 
+// ---------------------------------------------------------------------------
+//  جوونه (پله‌ی سوم) — میراث: نورونی که مکرراً در واژه‌های دقیقاً درست
+//  نقش داشته، ذخیره‌ی مانای خاصش به آستانه رسیده و خودش را کپی می‌کند.
+//
+//  چه چیزی میراث می‌رسد: نوع، لوب، برنامه (اگر خصوصی است، کپیِ جدا می‌گیرد
+//  تا جهشِ بعدیِ والد فرزند را هم عوض نکند)، الگوی یال‌ها، حافظه‌ی بدنه،
+//  و نصف مانای معمولی والد. فرزند کمی کنار والد می‌نشیند تا سیم‌کشی
+//  محلیِ آینده همان محیط را ببیند.
+//  چه چیزی میراث نمی‌رسد: رسیدها (worth)، اعتبار، پلاستیسیته، مانای خاص —
+//  فرزند با پرونده‌ی خالی متولد می‌شود و خودش محاکمه می‌شود.
+//  فرزند دهان/گوش نمی‌شود (بند ۲۶).
+//
+//  نکته‌ی پیاده‌سازی: B.n هنگام push_back ممکن است جابه‌جا شود، پس همه‌ی
+//  خواندن‌های والد پیش از push انجام می‌شود و به‌روزرسانی والد با اندیس،
+//  بعد از آن.
+// ---------------------------------------------------------------------------
+static void sprout_pass() {
+    const int need = g_sprout.load(std::memory_order_relaxed);
+    if (need <= 0) return;
+    if (B.now < B.next_sprout) return;
+    B.next_sprout = B.now + SPROUT_TICK;
+
+    const size_t n = B.n.size();
+    if (!n) return;
+    if (B.pop_base > 0 &&
+        (i64)n >= B.pop_base + B.pop_base * SPROUT_GROWTH_PCT / 100) return;
+    i64 budget = std::max<i64>(1, (i64)n / 1000);   // حداکثر ~۱ جوونه/ثانیه در هر ۱۰۰۰
+
+    for (size_t scanned = 0; scanned < n && budget > 0; ++scanned) {
+        const u32 pid = (u32)(B.sprout_cursor++ % n);
+        Neuron& p = B.n[pid];       // const نیست — rng والد حالت‌مند است
+        if (p.kind != K_NORMAL)   continue;
+        if (p.state != S_HEALTHY && p.state != S_IGNORE) continue;
+        if ((int)p.kmana < need)  continue;          // ذخیره‌ی خاص نرسیده
+        if (p.mana < p.cap / 2)   continue;          // باید بتواند فرزند را بزرگ کند
+
+        // --- ساخت فرزند — بدون اشاره‌گر به والد (push_back بردار را جابه‌جا می‌کند) ---
+        Neuron kid;
+        kid.id     = (u32)B.n.size();
+        kid.kind   = p.kind;
+        kid.lobe   = p.lobe;
+        kid.half   = p.half;
+        kid.state  = S_HEALTHY;
+        kid.x      = p.x + (i32)p.rng.range(-8, 8);   // جوونه‌ی محلی
+        kid.y      = p.y + (i32)p.rng.range(-8, 8);
+        kid.cap    = p.cap;
+        kid.mana   = p.mana / 2;                      // تقسیم سلولی
+        kid.rng    = Rng(p.rng.next() | 1ull);        // بذر فرزند از والد — قطعی
+        kid.prog   = p.prog;
+        kid.mem    = p.mem;
+        kid.out    = p.out;
+        for (auto& e : kid.out) e.worth = 0;          // بدن میراث، رسید نه
+        kid.in_at.assign(KIND_LINES[kid.kind], -1);
+        kid.in_src.assign(KIND_LINES[kid.kind], NO_NEURON);
+        kid.last_eval   = B.now;
+        kid.last_income = B.now;
+        // برنامه‌ی خصوصی والد باید برای فرزند هم خصوصیِ جدا باشد
+        if (p.own_prog) {
+            Program cp = g_progs[p.prog];
+            if (!g_prog_free.empty()) {
+                u32 slot = g_prog_free.back(); g_prog_free.pop_back();
+                g_progs[slot] = std::move(cp);
+                kid.prog = slot;
+            } else {
+                g_progs.push_back(std::move(cp));
+                kid.prog = (u32)(g_progs.size() - 1);
+            }
+            kid.own_prog = 1;
+        }
+
+        // --- والد: موجودی خاص صفر، نصف مانا به فرزند ---
+        B.n[pid].kmana = 0;
+        B.n[pid].mana -= kid.mana;
+
+        B.lp[kid.lobe].alive++;
+        B.lp[kid.lobe].cap_sum += kid.cap;
+        B.n.push_back(std::move(kid));
+        B.push(B.now + KIND_CADENCE[K_NORMAL], (u32)(B.n.size() - 1), EV_EVAL);
+        B.sprouts++;
+        --budget;
+    }
+}
+
 static void system_tick() {
     // --- معلمِ گویا (فلگ --teach-feed) ---
     // تا پیش از این، معلم فقط داوری می‌کرد و مغز هیچ‌وقت یک واژه‌ی واقعی
@@ -1502,6 +1624,7 @@ static void system_tick() {
         starvation_pass();
     rewire_pass();
     mutate_pass();
+    sprout_pass();
 
     B.push(B.now + SYS_TICK, 0, EV_SYS);
 }
@@ -1820,10 +1943,10 @@ static JudgeResult judge_word(const std::string& raw, int mode) {
     return R;
 }
 
-static void queue_feedback(const std::vector<u32>& trace, i64 milli) {
+static void queue_feedback(const std::vector<u32>& trace, i64 milli, bool exact = false) {
     if (!milli || trace.empty()) return;
     std::lock_guard<std::mutex> lk(g_feedback_mx);
-    g_feedback.push_back(PendingFeedback{trace, milli});
+    g_feedback.push_back(PendingFeedback{trace, milli, exact});
 }
 
 // ردگیری عقب‌گرد محلی: فقط ورودی‌هایی که در ۵۰ms پیش از فایر رسیده‌اند.
@@ -1916,7 +2039,7 @@ static void device_close_word() {
         // فشار اصلی خودکار روی اعتبار همان مسیر است. فقط یک‌هشتم به استخر
         // کل لوب می‌رود تا موج اولیه‌ی خطا، راه‌حل «برای همیشه ساکت شو» نسازد.
         g_reward_pending.fetch_add(reward / 8);
-        queue_feedback(w.trace, reward);
+        queue_feedback(w.trace, reward, J.exact);
     }
 
     B.words.push_back(std::move(w));
@@ -2046,7 +2169,7 @@ static void device_score(u32 word_id, int score) {
 static bool save_brain(const char* path) {
     FILE* f = fopen(path, "wb");
     if (!f) return false;
-    const char magic[8] = {'S','M','I','L','E','0','0','6'};
+    const char magic[8] = {'S','M','I','L','E','0','0','7'};
     fwrite(magic, 1, 8, f);
     u32 nprog = (u32)g_progs.size(); fwrite(&nprog, 4, 1, f);
     for (auto& p : g_progs) {
@@ -2074,11 +2197,13 @@ static bool save_brain(const char* path) {
         u32 esz = (u32)nu.out.size(); fwrite(&esz, 4, 1, f);
         for (auto& e : nu.out) { fwrite(&e.dst,4,1,f); fwrite(&e.line,1,1,f);
                                  fwrite(&e.delay,8,1,f); fwrite(&e.worth,4,1,f); }
+        fwrite(&nu.kmana, 2, 1, f);          // مانای خاص (SMILE007)
     }
     for (int L = 0; L < N_LOBES; ++L) {
         fwrite(&B.lp[L].pool, 8, 1, f);
         fwrite(&B.lp[L].alive, 8, 1, f);
     }
+    fwrite(&B.pop_base, 8, 1, f);            // جمعیت پایه — سقف رشد جوونه
     fclose(f);
     return true;
 }
@@ -2087,15 +2212,17 @@ static bool load_brain(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) return false;
     char magic[8];
-    const char current_magic[8] = {'S','M','I','L','E','0','0','6'};
+    const char current_magic[8] = {'S','M','I','L','E','0','0','7'};
+    const char v6_magic[8]      = {'S','M','I','L','E','0','0','6'};
     const char v5_magic[8]      = {'S','M','I','L','E','0','0','5'};
     const char v4_magic[8]      = {'S','M','I','L','E','0','0','4'};
     if (fread(magic,1,8,f) != 8 ||
-        (memcmp(magic,current_magic,8) && memcmp(magic,v5_magic,8) &&
-         memcmp(magic,v4_magic,8))) {
+        (memcmp(magic,current_magic,8) && memcmp(magic,v6_magic,8) &&
+         memcmp(magic,v5_magic,8) && memcmp(magic,v4_magic,8))) {
         fclose(f); return false;
     }
-    bool has_worth      = memcmp(magic,current_magic,8) == 0;
+    bool has_kmana      = memcmp(magic,current_magic,8) == 0;
+    bool has_worth      = has_kmana || memcmp(magic,v6_magic,8) == 0;
     bool has_plasticity = has_worth || memcmp(magic,v5_magic,8) == 0;
     u32 nprog = 0; if (fread(&nprog,4,1,f)!=1) { fclose(f); return false; }
     g_progs.clear(); g_progs.resize(nprog);
@@ -2131,6 +2258,7 @@ static bool load_brain(const char* path) {
                                  fread(&nu.out[k].delay,8,1,f);
                                  if (has_worth) fread(&nu.out[k].worth,4,1,f);
                                  else nu.out[k].worth = 0; }
+        if (has_kmana) fread(&nu.kmana,2,1,f); else nu.kmana = 0;
         nu.in_at.assign(KIND_LINES[nu.kind], -1);
         nu.in_src.assign(KIND_LINES[nu.kind], NO_NEURON);
         nu.last_eval = B.now;
@@ -2143,6 +2271,10 @@ static bool load_brain(const char* path) {
         for (auto& nu : B.n) if (nu.state != S_DEAD && nu.lobe == L) B.lp[L].cap_sum += nu.cap;
         B.lp[L].target = std::max<i64>(1, B.lp[L].cap_sum * 3 / 5);
     }
+    // جمعیت پایه — در چک‌پوینت‌های قدیمی از جمعیت فعلی مشتق می‌شود
+    B.pop_base = (i64)B.n.size();
+    if (has_kmana) (void)fread(&B.pop_base,8,1,f);
+    if (B.pop_base <= 0) B.pop_base = (i64)B.n.size();
     fclose(f);
     B.q.reset((u64)B.now);
     B.seq = 0;
@@ -2158,6 +2290,7 @@ static bool load_brain(const char* path) {
     B.next_feed = B.now; B.words_fed = 0;
     // درسِ ادامه نباید تکرارِ درسِ قبل باشد — بذرِ معلم با زمان ترکیب می‌شود
     B.feed_rng = Rng(B.seed ^ 0x51ED270Bull ^ (u64)B.now);
+    B.sprouts = 0; B.next_sprout = 0; B.sprout_cursor = 0;
     g_prog_free.clear();
     return true;
 }
@@ -3390,6 +3523,7 @@ static void print_usage(const char* exe) {
         "    --mutate               پله‌ی دوم: جهش پولی تابع داخلی نورون تنبیه‌شده (پیش‌فرض خاموش)\n"
         "    --silence              جریمه‌ی سکوت: دهانِ بسته هم هزینه دارد (پیش‌فرض خاموش)\n"
         "    --teach-feed N         معلم هر N ثانیه مجازی یک واژه‌ی واقعی می‌گوید (۰ = خاموش)\n"
+        "    --sprout N             پله‌ی سوم: آستانه‌ی مانای خاص برای جوونه زدن (۰ = خاموش، مثال: 10)\n"
         "    -h, --help             همین راهنما\n"
         "\n"
         "  example: %s --neurons 32000 --port 8420 --words persian_words.tsv\n"
@@ -3423,6 +3557,7 @@ int main(int argc, char** argv) {
         else if (a == "--mutate")     g_mutate.store(1);
         else if (a == "--silence")    g_silence.store(1);
         else if (a == "--teach-feed") g_teach_feed.store(std::max(0, std::min(3600, atoi(nxt()))));
+        else if (a == "--sprout")     g_sprout.store(std::max(0, std::min(60000, atoi(nxt()))));
         else if (a == "--talk")       g_talkativeness.store(std::max(10, std::min(400, atoi(nxt()))));
         else if (a == "--holdout")    g_holdout.store(std::max(0, std::min(90, atoi(nxt()))));
         else if (a == "--teacher-strength")
@@ -3467,8 +3602,14 @@ int main(int argc, char** argv) {
     }
 
     bool checkpoint_loaded = loadf && load_brain(loadf);
-    if (checkpoint_loaded && B.n.size() == (size_t)N) {
+    // مغزِ رشدکرده (جوونه‌ی پله‌ی سوم) همان مغز است — pop_base همان اندازه‌ی
+    // ساخته‌شده در روز اول را دارد. فقط در این حالت ادامه با جمعیتِ بیشتر
+    // مجاز است؛ هر اختلاف دیگر یعنی مغزِ دیگری است و از نو ساخته می‌شود.
+    if (checkpoint_loaded && (B.n.size() == (size_t)N || B.pop_base == (i64)N)) {
         printf("  بارگذاری از چک‌پوینت: %s  (%zu نورون)\n", loadf, B.n.size());
+        if (B.n.size() != (size_t)N)
+            printf("  جمعیت رشدکرده: پایه %lld → %zu نورون. ادامه‌ی همان مغز.\n",
+                   (long long)B.pop_base, B.n.size());
     } else {
         if (checkpoint_loaded) {
             printf("  [!] چک‌پوینت %zu نورون دارد؛ اندازه‌ی درخواستی %d است. مغز تازه ساخته می‌شود.\n",
@@ -3549,6 +3690,12 @@ int main(int argc, char** argv) {
                    "جریمه‌ی سکوت=%lld · واژه‌های معلم=%lld\n",
                    (long long)B.mutates, (long long)(B.mutate_spend / MANA),
                    (long long)own, (long long)B.silence_ticks, (long long)B.words_fed);
+            i64 ksum = 0, kmax = 0;
+            for (const auto& nu : B.n) { ksum += nu.kmana; if (nu.kmana > kmax) kmax = nu.kmana; }
+            printf("  پله‌ی سوم: جوونه‌ها=%lld · جمعیت=%zu (پایه %lld) · "
+                   "ذخیره‌ی خاص: مجموع=%lld بیشینه=%lld\n",
+                   (long long)B.sprouts, B.n.size(), (long long)B.pop_base,
+                   (long long)ksum, (long long)kmax);
         }
         // خط ماشین‌خوان برای هارنس A/B — قالب ثابت، مقادیر با فاصله
         {
@@ -3564,7 +3711,8 @@ int main(int argc, char** argv) {
             printf("RESULT seed=%llu neurons=%zu rewire=%d holdout=%d "
                    "words=%lld exact=%lld exactpct=%.4f held=%lld heldpct=%.4f "
                    "avgQ=%.4f lastQ=%.4f dead=%lld rewires=%lld negedges=%lld "
-                   "mutates=%lld own=%lld silence=%lld fed=%lld\n",
+                   "mutates=%lld own=%lld silence=%lld fed=%lld "
+                   "sprouts=%lld pop=%zu\n",
                    (unsigned long long)seed, B.n.size(),
                    g_rewire.load(), g_holdout.load(),
                    (long long)B.words_auto, (long long)B.words_exact,
@@ -3575,7 +3723,8 @@ int main(int argc, char** argv) {
                    k ? q_last / k : 0.0,
                    (long long)dead, (long long)B.rewires, (long long)eworth_neg,
                    (long long)B.mutates, (long long)own,
-                   (long long)B.silence_ticks, (long long)B.words_fed);
+                   (long long)B.silence_ticks, (long long)B.words_fed,
+                   (long long)B.sprouts, B.n.size());
         }
         save_brain("brain.dat");
         printf("\n  ذخیره شد: brain.dat\n");

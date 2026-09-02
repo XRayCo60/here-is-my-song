@@ -171,6 +171,74 @@ ON_FLAGS='--teach-feed 3' bench/ab.sh 10 600 1000
 COMMON_FLAGS='--teach-feed 3' ON_FLAGS='--silence --mutate' bench/ab.sh 10 600 1000
 ```
 
+## Third learning rung — special mana and sprouting (`--sprout N`)
+
+Section 35 of `ARCHITECTURE.md` in full. The evolutionary loop had variation (mutation)
+and selection (the mana economy) but **no heredity** — a neuron that provably helped
+produce correct words couldn't copy itself, so good paths were never amplified.
+
+`--sprout N` closes the loop:
+
+- Every neuron has a **separate savings counter** (`kmana`, "special mana") that can't be
+  spent on anything else. Each participation in an **exactly-correct** word adds 1 (mouths
+  excluded — they participate in every word, right or wrong, so their share isn't merit).
+- When savings reach the threshold (try 5 or 10), the neuron zeroes its balance and
+  **sprouts a copy of itself**. Inherited: kind, lobe, program (a mutant parent's private
+  program is re-copied so later mutations don't drag the child along), wiring pattern,
+  body memory, and **half the parent's ordinary mana** (cell division — no money printed).
+  Not inherited: edge receipts, credit, plasticity, special mana. The child is born with a
+  blank record and stands its own trial. Children are never mouths/ears (band 26) and sit
+  next to the parent.
+- Two brakes: ~1 sprout/second per 1000 neurons, and a 25%-of-base population cap. When
+  the brain eventually understands meanings, this is the volume-control knob to turn off —
+  it's a flag, not hardwired.
+
+Checkpoint format `SMILE007` persists `kmana` + the base population; grown brains
+(pop_base == N) continue across `--load` instead of being rebuilt. Bit-identical default
+path verified. (One gotcha fixed along the way: `bench/smile-bench` must be rebuilt after
+adding flags — stale binaries exit 2 on unknown options, silently.)
+
+### A/B in a single 600s window: neutral
+
+Both arms `--teach-feed 3 --silence --mutate`; on-arm adds `--sprout 5` (10 seeds, paired
+t-test df=9):
+
+| metric | without | with | diff | t |
+|---|---|---|---|---|
+| exact % | 7.21 ± 2.70 | 6.66 ± 1.98 | −0.55 | −0.51 |
+| avg quality | 14.42 | 14.06 | −0.36 | −0.34 |
+| words | 166.1 | 176.9 | +10.8 | +0.64 |
+| held-out % | 0.22 | 0.36 | +0.14 | +1.05 |
+
+Nothing significant — expected: amplifying good paths pays off over generations, not in
+one window. Avg 20 sprouts per run (range 0–69), population up to ~1020.
+
+### Long run — three hours with sprouting
+
+```bash
+FLAGS='--teach-feed 3 --silence --mutate --sprout 5' bench/longrun.sh 1 9 1200 1000
+```
+
+Result (seeds 1–2, `--sprout 5`; each segment = 20 virtual minutes; compare against the
+rung-2 curves above which used identical flags minus sprouting):
+
+| seed 1 +sprout — exact % | 10.5 | 5.0 | 6.5 | 6.1 | 14.3 | 0.0 | 7.6 | 0.0 | 7.1 |
+|---|---|---|---|---|---|---|---|---|---|
+| seed 1 +sprout — words | 143 | 222 | 138 | 33 | 105 | 1 | 66 | 10 | 56 |
+| seed 2 +sprout — exact % | 4.4 | 7.0 | 9.5 | 6.1 | 7.0 | 0.0 | 4.7 | **22.2** | **22.2** |
+| seed 2 +sprout — words | 137 | 128 | 200 | 181 | 43 | 11 | 43 | **9** | **9** |
+| seed 2 +sprout — population | 1001 | 1012 | 1087 | 1116 | 1121 | 1121 | 1128 | 1134 | 1140 |
+
+- **Seed 2 shows the first hint of the intended dynamics**: population keeps growing
+  (1000 → 1140, descendants of exact-word producers), and by the last two segments
+  precision jumps (22% exact, avgQ 31–37 vs the control's 2.9% / 15.7) — **but word volume
+  collapses to 9 per segment**. The brain becomes selective: it says little, and what it
+  says is much better. Whether that's "learning to speak well" or "retreating into
+  repeating a few safe words" needs a next experiment (track word diversity).
+- **Seed 1 is unchanged** from its no-sprout twin — same instability, same decay.
+- The word-volume decay over hours is still the dominant unsolved problem; sprouting
+  changes *what* survives, not the slide toward silence.
+
 ## CUDA test on Windows
 
 Requirements:
