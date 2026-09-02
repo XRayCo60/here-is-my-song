@@ -88,6 +88,89 @@ bench/ab.sh 10 600 1000
 With the flag off, the engine is bit-identical to the previous build (verified by comparing
 run fingerprints across seeds).
 
+## Second learning rung — paid function mutation, silence penalty, talking teacher
+
+Section 34 of `ARCHITECTURE.md` in full. Three new opt-in flags, all default **off**:
+
+- **`--mutate`** — a punished neuron (plasticity < −1024) can pay **10 mana** (half its tank)
+  to mutate **its own bytecode**: the program table is shared, so mutation first clones the
+  program into a private copy, then changes exactly one instruction (nudge a numeric
+  constant ±48, swap an ALU opcode, or swap a sense channel). Dead owners' slots are
+  recycled. Rate cap: 0.5% of the population per second.
+- **`--silence`** — staying quiet to avoid punishment no longer works. If no real word is
+  closed for 10s (30s grace at start), each second applies a −2 mana fine through the same
+  path as rewards (output-lobe pool drain + temporary income cut). Two brakes: a grace
+  period after every word, and suspension while the output pool is below 40% — so the
+  mouths can't be flogged to permanent silence.
+- **`--teach-feed N`** — the automatic teacher finally *speaks*: every N virtual seconds it
+  says one verified word through the same input codec a human uses. Until now the brain
+  **never heard a real word** in headless runs (only its own mirror). Fed words are always
+  outside the held-out set.
+
+Mutation also exposed a latent VM bug: `INT_MIN / −1` (and `INT_MIN % −1`) in `OP_DIV`/
+`OP_MOD` raises `SIGFPE` and kills the whole process. Seed programs never reach it (small
+positive constants), mutated programs can — the first long run died exactly there. The
+guards are complete now and the default path stayed bit-identical.
+
+Checkpoint format is unchanged (`own_prog` is derived on load: `prog ≥ 10` means private);
+save/load round-trip with live mutants was tested. With all new flags off the engine is
+again **bit-identical** to the previous build (seeds 1/2 fingerprints match).
+
+### A/B results (10 seeds, 1000 neurons, 600s, paired t-test df=9)
+
+| configuration | exact % | avg quality | words | dead |
+|---|---|---|---|---|
+| baseline (no feed) | 7.18 ± 2.24 | 11.83 | 162.5 | 0 |
+| + talking teacher | 7.93 ± 1.78 | 12.87 | 170.4 | 0 |
+| teacher + rewire + silence + mutate | **4.84 ± 2.61** | 13.16 | **79.9** | 96.5 |
+| teacher + silence + mutate (no rewire) | 7.21 ± 2.70 | 14.42 | 166.1 | 0 |
+
+Reading:
+
+- The **talking teacher alone** is a small, not-significant gain (+0.75 points).
+- The **full combo with starvation is counterproductive**: rank-based starvation kills
+  exactly the punished neurons that mutate (they sit at the bottom of the credit table),
+  so mutations never get a fair trial — avg 32 mutations per run, 0 live private programs.
+- **Without starvation, mutation actually flows** (~2030 mutations, ~20 live private
+  programs per run) and the word-count collapse from rung 1 disappears (166 vs 170 words;
+  rung 1's `--rewire` had dropped it to 93). Quality rises slightly (+1.55, not
+  significant). Still no learning win.
+
+### Long run — three hours alone with the teacher
+
+`bench/longrun.sh` chains checkpointed segments and prints one `RESULT` line per segment:
+
+```bash
+FLAGS='--teach-feed 3 --silence --mutate' bench/longrun.sh 1 9 1200 1000
+```
+
+Result (seeds 1–2 with `--teach-feed 3 --silence --mutate`, plus a teacher-only control; each
+segment = 20 virtual minutes; `bench/longrun.sh SEED 9 1200 1000`):
+
+| seed 1 combo — exact % per segment | 9.7 | 5.6 | 7.1 | 0.0 | 2.3 | **15.3** | 0.0 | 0.0 | 11.3 |
+|---|---|---|---|---|---|---|---|---|---|
+| seed 2 combo — exact % per segment | 5.9 | 10.8 | 9.6 | 4.9 | 9.8 | 9.9 | 7.1 | 2.7 | 2.9 |
+| control (teacher only) — exact % | 8.9 | 8.2 | 6.8 | 6.1 | 4.1 | 6.7 | 4.8 | 13.2 | 3.7 |
+
+- **No reliable learning in three hours**, in either configuration. Exact-word rate stays in
+  the same 0–15% noisy band it started in.
+- **The control drifts slightly down** (mean ≈ 6.9%) — hearing words alone does nothing.
+- **The combo runs are less stable, not more**: seed 1 oscillates wildly (words per segment
+  19…242, exact 0%…15.3%); seed 2 holds quality high (avgQ ≈ 15 vs control ≈ 12) but its
+  word output decays over the three hours (135 → ~34 words per segment) — even with the
+  silence fine, the brain slowly retreats into quieter strategies.
+- Mutation really flows and survives (private programs grow to 80+ and stay alive), so the
+  mechanism works; what's missing is anything that **consolidates** a good mutant. Credit
+  is smeared over ~256-neuron causal traces, so nothing teaches the network *which*
+  mutation was the good one.
+
+Reproduce the A/B tables:
+
+```bash
+ON_FLAGS='--teach-feed 3' bench/ab.sh 10 600 1000
+COMMON_FLAGS='--teach-feed 3' ON_FLAGS='--silence --mutate' bench/ab.sh 10 600 1000
+```
+
 ## CUDA test on Windows
 
 Requirements:

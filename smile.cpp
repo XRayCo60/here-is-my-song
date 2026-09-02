@@ -124,6 +124,34 @@ static constexpr i64   STARVE_PCT     = 5;          // فقط ۵٪ ته جدول
 static constexpr i64   STRESS_PCT     = 60;         // استخر زیر ۶۰٪ هدف = قحطی
 static constexpr int   TRACE_EDGE_MAX = 256;        // سقف نورون‌های ردپا برای رسید یالی
 
+// --- پله‌ی دوم یادگیری: جهش پولی تابع داخلی + جریمه‌ی سکوت + معلمِ گویا ---
+//
+//  جهش (فلگ --mutate): «نورون خودش بتواند پارامترهای تابعش را با هزینه
+//  تغییر دهد». سه قید سخت‌گیرانه:
+//    ۱. برنامه‌های بذر مشترک‌اند (بند ۱۲٫۶)؛ جهش همیشه روی یک کپیِ خصوصی
+//       انجام می‌شود — نورون فقط خودش را عوض می‌کند، نه فامیل را.
+//    ۲. فقط نورونِ تنبیه‌شده جهش می‌خرد: کسی که راه‌حل فعلی‌اش مکرراً به
+//       تنبیه خورده، آخرین دارایی‌اش را خرج «کسی دیگر شدن» می‌کند.
+//    ۳. جهش کوچک است: در هر بار فقط یک دستور — یک ثابت کمی جابه‌جا، یک
+//       عمل جبری عوض‌شده، یا یک حسگر دیگر. بازنویسی کامل تابع کار لایه‌ی
+//       بعدی (غول‌های بازنویس) است، نه اینجا.
+static constexpr i64   MUTATE_COST    = 10 * MANA;  // نصف مخزن یک نورون عادی
+static constexpr vtime MUTATE_TICK    = 1 * SEC;
+static constexpr i64   MUTATE_PPT     = 5;          // سقف ۰٫۵٪ جمعیت در هر دور
+static constexpr i16   MUTATE_PLAST   = -1024;      // آستانه‌ی «تنبیه‌شده بودن»
+static constexpr i32   MUTATE_DELTA   = 48;         // بیشینه‌ی جابه‌جایی ثابت‌ها
+static constexpr u32   PROG_SHARED_COUNT = 10;      // ۶ عادی + ۳ حافظه‌ای + ۱ غول
+
+//  جریمه‌ی سکوت (فلگ --silence): «برای همیشه ساکت شو» دیگر راه فرار از
+//  تنبیه نیست. دهانِ بسته هم هزینه دارد — همان مسیر پاداش (فشردن استخر
+//  لوب پایانی + قطع موقت درآمد) را می‌گیرد، با دو ترمز: مهلت کوتاه پس از
+//  هر واژه، و توقف وقتی استخر خودش زیر ۴۰٪ است (از مرده لختی خون کشیدن
+//  نداریم؛ کشتن همه‌ی دهان‌ها یعنی خروجی برای همیشه خاموش).
+static constexpr vtime SILENCE_GRACE  = 10 * SEC;   // مهلت پس از هر واژه‌ی واقعی
+static constexpr vtime SILENCE_WARMUP = 30 * SEC;   // دوره‌ی ارفاق اولیه
+static constexpr i64   SILENCE_FINE   = 2 * MANA;   // جریمه‌ی هر ثانیه‌ی سکوت
+static constexpr i64   SILENCE_POOL_FLOOR_PCT = 40; // زیر این پرشدگی، جریمه تعلیق
+
 static constexpr vtime REFRACTORY = 40 * MS;      // دوره‌ی تعلیق پس از هر فایر (ضد اسپم)
 static constexpr vtime SYS_TICK   = 50 * MS;      // سیستم‌تیک: درآمد، مالیات، مرگ
 static constexpr vtime EDGE_MIN   = 1 * MS;
@@ -214,6 +242,7 @@ struct Neuron {
     u8   half   = 0;                 // نیمه‌ی الف/ب لوب ورودی
     u8   is_mouth = 0;               // آیا به خروجی واقعی وصل است؟ (بند ۲۴)
     u8   starved  = 0;               // ته جدول اعتبار در قحطی (فقط با --rewire)
+    u8   own_prog = 0;               // بایت‌کدِ خصوصی دارد؟ (جهش پله‌ی دوم؛ در چک‌پوینت از nu.prog مشتق می‌شود)
     u8   is_ear   = 0;               // آیا ورودی بیرونی می‌گیرد؟ (بند ۲۶)
     i32  x = 0, y = 0;               // مختصات — برای سیم‌کشی محلی‌گرا (بند ۱۲٫۳)
 
@@ -431,6 +460,15 @@ struct Brain {
     i64                  rewire_spend = 0;    // مانای سوخته برای سیم‌کشی
     vtime                next_rewire  = 0;
     size_t               rewire_cursor = 0;
+    i64                  mutates      = 0;    // جهش‌های خریداری‌شده‌ی تابع داخلی
+    i64                  mutate_spend = 0;    // مانای سوخته برای جهش
+    vtime                next_mutate  = 0;
+    size_t               mutate_cursor = 0;
+    vtime                last_word_vt = 0;     // آخرین بستن واژه‌ی واقعی (جریمه‌ی سکوت)
+    i64                  silence_ticks = 0;   // دفعات اعمال جریمه‌ی سکوت
+    vtime                next_feed    = 0;    // وعده‌ی بعدی سخن گفتن معلم
+    i64                  words_fed    = 0;    // واژه‌هایی که معلم خودش گفته است
+    Rng                  feed_rng{1};         // بذر مستقل انتخاب واژه‌ی معلم
     i64                  words_positive = 0;
     i64                  words_negative = 0;
     i64                  words_neutral  = 0;
@@ -478,6 +516,14 @@ static std::string       g_user_words_path = "my_words.tsv";
 // --- پله‌ی اول: سیم‌کشی مجدد پولی و کنارگذاری واژه برای سنجش صادقانه ---
 static std::atomic<int>  g_rewire{0};    // ۰ خاموش (پیش‌فرض) · ۱ روشن
 static std::atomic<int>  g_holdout{0};   // درصد واژه‌های کنارگذاشته از پاداش
+
+// --- پله‌ی دوم: جهش پولی تابع داخلی، جریمه‌ی سکوت، معلمِ گویا ---
+static std::atomic<int>  g_mutate{0};     // ۰ خاموش (پیش‌فرض) · ۱ روشن
+static std::atomic<int>  g_silence{0};    // ۰ خاموش (پیش‌فرض) · ۱ روشن
+static std::atomic<int>  g_teach_feed{0}; // فاصله‌ی ثانیه‌ی سخن گفتن معلم؛ ۰ = خاموش
+static std::vector<std::string> g_feed_pool;   // واژه‌های مجازِ معلم (بدون کنارگذاشته‌ها)
+static bool                   g_feed_pool_ready = false;
+static std::vector<u32>       g_prog_free;     // جای بازیافت‌شده‌ی برنامه‌های خصوصیِ مرده‌ها
 
 struct PendingFeedback {
     std::vector<u32> trace;
@@ -708,8 +754,8 @@ static VmResult vm_run(Neuron& nu, Brain& br) {
         case OP_ADD:  r[d] = r[a] + RD(im); break;
         case OP_SUB:  r[d] = r[a] - RD(im); break;
         case OP_MUL:  r[d] = (i32)(((i64)r[a] * RD(im)) & 0x7FFFFFFF); break;
-        case OP_DIV: { i32 v = RD(im); r[d] = v ? r[a] / v : 0; break; }
-        case OP_MOD: { i32 v = RD(im); r[d] = v ? r[a] % v : 0; break; }
+        case OP_DIV: { i32 v = RD(im); r[d] = (v == 0 || (v == -1 && r[a] == (i32)0x80000000)) ? 0 : r[a] / v; break; }
+        case OP_MOD: { i32 v = RD(im); r[d] = (v == 0 || (v == -1 && r[a] == (i32)0x80000000)) ? 0 : r[a] % v; break; }
         case OP_AND:  r[d] = r[a] & RD(im); break;
         case OP_OR:   r[d] = r[a] | RD(im); break;
         case OP_XOR:  r[d] = r[a] ^ RD(im); break;
@@ -965,6 +1011,13 @@ static void build_brain(int N, u64 seed) {
     B.c_fires = B.c_signals = B.c_faults = B.c_events = 0;
     B.c_fires_prev = 0; B.t_prev = 0;
     B.out_bits.clear(); B.out_text.clear();
+
+    // --- شمارنده‌های پله‌ی دوم ---
+    B.mutates = B.mutate_spend = 0; B.next_mutate = 0; B.mutate_cursor = 0;
+    B.last_word_vt = SILENCE_WARMUP; B.silence_ticks = 0;
+    B.next_feed = 0; B.words_fed = 0;
+    B.feed_rng = Rng(seed ^ 0x51ED270Bull);
+    g_prog_free.clear();
 }
 
 // ============================================================================
@@ -1181,7 +1234,131 @@ static void rewire_pass() {
     }
 }
 
+// ---------------------------------------------------------------------------
+//  جهش پولی تابع داخلی (پله‌ی دوم — بند «تغییر پارامتر تابع با هزینه»).
+//  مقصود جهش این نیست که بهتر شود — مقصود این است که «متفاوت» شود و
+//  انتخاب طبیعی بعداً تصمیم بگیرد. سه اصل در بالا (بلوک ثابت‌ها) آمده.
+//  نکته‌ی حافظه: جای برنامه‌های خصوصیِ صاحبانِ مرده با فهرست بازیافت
+//  برمی‌گردد، پس جدول g_progs در اجرای بلند بی‌اندازه رشد نمی‌کند.
+// ---------------------------------------------------------------------------
+static bool is_alu_op(u8 op) {
+    switch (op) {
+        case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
+        case OP_AND: case OP_OR:  case OP_XOR: case OP_SHL: case OP_SHR:
+        case OP_EQ:  case OP_LT:  case OP_GT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void mutate_pass() {
+    if (!g_mutate.load(std::memory_order_relaxed)) return;
+    if (B.now < B.next_mutate) return;
+    B.next_mutate = B.now + MUTATE_TICK;
+
+    const size_t n = B.n.size();
+    if (!n) return;
+    i64 budget = std::max<i64>(1, (i64)n * MUTATE_PPT / 1000);
+
+    for (size_t scanned = 0; scanned < n && budget > 0; ++scanned) {
+        Neuron& nu = B.n[B.mutate_cursor++ % n];
+        if (nu.kind != K_NORMAL)   continue;      // حافظه‌ای/غول: فاز بعد
+        if (nu.state == S_DEAD || nu.state == S_SPAM) continue;
+        if (nu.plasticity >= MUTATE_PLAST) continue;   // هنوز تنبیه‌شده نیست
+        if (nu.mana < MUTATE_COST) continue;      // پولش را ندارد
+
+        // کپیِ خصوصی از بایت‌کد — برنامه‌ی مشترک هرگز جهش نمی‌گیرد
+        if (!nu.own_prog) {
+            Program cp = g_progs[nu.prog];
+            if (!g_prog_free.empty()) {
+                u32 slot = g_prog_free.back(); g_prog_free.pop_back();
+                g_progs[slot] = std::move(cp);
+                nu.prog = slot;
+            } else {
+                g_progs.push_back(std::move(cp));
+                nu.prog = (u32)(g_progs.size() - 1);
+            }
+            nu.own_prog = 1;
+        }
+        Program& P = g_progs[nu.prog];
+        if (P.code.size() < 2) continue;
+
+        // یک تغییر، یک دستور — کوچک و معنادار
+        bool done = false;
+        for (int tries = 0; tries < 4 && !done; ++tries) {
+            u32 idx = nu.rng.below((u32)P.code.size());
+            u32 ins = P.code[idx];
+            u8  op  = (u8)(ins >> 24);
+            u16 im  = (u16)(ins & 0xFFFF);
+            if (op == OP_SENSE) {
+                // حسگر دیگر: به جای «تعداد خط فعال» مثلاً «درصد مانا» را حس کن
+                P.code[idx] = (ins & 0xFFFF0000u) | (u16)nu.rng.below(9);
+                done = true;
+            } else if (im & 0x8000) {
+                // ثابت عددی (وزن/آستانه): کمی جابه‌جا
+                i32 v = (i32)(im & 0x7FFF);
+                if (v & 0x4000) v -= 0x8000;
+                i32 d = (i32)nu.rng.range(1, MUTATE_DELTA) * (nu.rng.below(2) ? 1 : -1);
+                v += d;
+                if (v >  16383) v =  16383;
+                if (v < -16384) v = -16384;
+                P.code[idx] = (ins & 0xFFFF0000u) | 0x8000u | (u16)(v & 0x7FFF);
+                done = true;
+            } else if (is_alu_op(op)) {
+                // عمل جبری: جمع بدهد سربیا
+                static const u8 family[] = {
+                    OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD,
+                    OP_AND, OP_OR,  OP_XOR, OP_SHL, OP_SHR,
+                    OP_EQ,  OP_LT,  OP_GT };
+                for (int guard = 0; guard < 8; ++guard) {
+                    u8 alt = family[nu.rng.below((u32)(sizeof family / sizeof family[0]))];
+                    if (alt != op) {
+                        P.code[idx] = ((u32)alt << 24) | (ins & 0x00FFFFFFu);
+                        done = true; break;
+                    }
+                }
+            }
+        }
+        if (!done) continue;
+
+        nu.mana -= MUTATE_COST;
+        B.transit.push_back({B.now + TRANSIT_TIME, MUTATE_COST});
+        B.transit_total += MUTATE_COST;
+        B.mutates++; B.mutate_spend += MUTATE_COST;
+        --budget;
+    }
+}
+
+// پیش‌اعلان — تعریف در بخش ۱۲ و ۱۳ (دستگاه): واژه‌نامه‌ی معلم و کدک ورودی
+static bool teacher_can_speak();
+static const std::string& teacher_pick_word();
+static void encode_to_input(const std::string& text);
+
 static void system_tick() {
+    // --- معلمِ گویا (فلگ --teach-feed) ---
+    // تا پیش از این، معلم فقط داوری می‌کرد و مغز هیچ‌وقت یک واژه‌ی واقعی
+    // نمی‌شنید — تنها صدای خودش (آینه) را. «ساعت‌ها تنها گذاشتن با معلم»
+    // فقط وقتی معنا دارد که معلم هم زبان داشته باشد. واژه از مجموعه‌ی
+    // تاییدشده و همیشه خارج از کنارگذاشته‌ها — تا سنجش تعمیم آلوده نشود.
+    if (g_teach_feed.load(std::memory_order_relaxed) > 0 && B.now >= B.next_feed
+        && teacher_can_speak()) {
+        B.next_feed = B.now + (vtime)g_teach_feed.load(std::memory_order_relaxed) * SEC;
+        const std::string& w = teacher_pick_word();
+        if (!w.empty()) {
+            {
+                std::lock_guard<std::mutex> lk(g_mx);
+                ChatMsg m;
+                m.id = B.next_msg_id++; m.from_human = false;
+                m.text = w; m.t = (double)B.now / SEC;
+                B.chat.push_back(m);
+                if (B.chat.size() > 120) B.chat.erase(B.chat.begin());
+                encode_to_input(w);
+            }
+            B.words_fed++;
+        }
+    }
+
     // --- بازگشت مانای در ترانزیت (بند ۵٫۲) ---
     while (!B.transit.empty() && B.transit.front().first <= B.now) {
         i64 amt = B.transit.front().second;
@@ -1303,11 +1480,28 @@ static void system_tick() {
     i64 rw = g_reward_pending.exchange(0);
     if (rw) apply_reward(rw);
 
+    // --- جریمه‌ی سکوت (فلگ --silence) ---
+    // «ساکت بمان تا تنبیه نشوی» دیگر سودده نیست: دهانِ بسته هم هزینه دارد.
+    // دو ترمز: مهلت کوتاه پس از هر واژه‌ی واقعی، و تعلیق وقتی استخر لوب
+    // پایانی خودش زیر ۴۰٪ است — تا همه‌ی دهان‌ها نمرده و خروجی برای همیشه
+    // خاموش نشود.
+    if (g_silence.load(std::memory_order_relaxed)) {
+        const LobePool& P = B.lp[L_OUTPUT];
+        const bool recent_word = B.now - B.last_word_vt < SILENCE_GRACE;
+        const bool exhausted   = P.target > 0
+                              && P.pool * 100 < P.target * SILENCE_POOL_FLOOR_PCT;
+        if (!recent_word && !exhausted) {
+            apply_reward(-SILENCE_FINE);
+            B.silence_ticks++;
+        }
+    }
+
     // پس از اعمال رسیدها: اول رتبه‌بندی گرسنگان، سپس سیم‌کشی مجدد —
     // هر دو با تازه‌ترین اعتبار تصمیم می‌گیرند.
     if (g_rewire.load(std::memory_order_relaxed) && B.now >= B.next_rewire)
         starvation_pass();
     rewire_pass();
+    mutate_pass();
 
     B.push(B.now + SYS_TICK, 0, EV_SYS);
 }
@@ -1373,6 +1567,23 @@ struct TeacherLexicon {
     std::string error;
 };
 static TeacherLexicon g_lexicon;
+
+// --- معلمِ گویا (پله‌ی دوم): انتخاب واژه برای سخن گفتن ---
+// استخر واژه‌ها یک بار ساخته می‌شود و همیشه خارج از مجموعه‌ی کنارگذاشته
+// است — معلم هرگز واژه‌ی امتحان را نمی‌گوید تا سنجش تعمیم آلوده نشود.
+static bool teacher_can_speak() { return g_lexicon.loaded; }
+
+static const std::string& teacher_pick_word() {
+    if (!g_feed_pool_ready) {
+        g_feed_pool.clear();
+        for (const auto& w : g_lexicon.verified)
+            if (!g_lexicon.held.count(w)) g_feed_pool.push_back(w);
+        g_feed_pool_ready = !g_feed_pool.empty();
+    }
+    static const std::string empty;
+    if (g_feed_pool.empty()) return empty;
+    return g_feed_pool[B.feed_rng.below((u32)g_feed_pool.size())];
+}
 
 static void replace_all(std::string& s, const std::string& from, const std::string& to) {
     if (from.empty()) return;
@@ -1648,6 +1859,7 @@ static void collect_causal_trace(u32 root, vtime at, std::vector<u32>& dst) {
 // بستن کلمه‌ی جاری و فرستادنش برای نمره‌دهی
 static void device_close_word() {
     if (B.cur_word.empty()) { B.cur_trace.clear(); return; }
+    B.last_word_vt = B.now;        // تازه حرف زده — جریمه‌ی سکوت متوقف می‌شود
     std::lock_guard<std::mutex> lk(g_mx);
 
     OutWord w;
@@ -1745,18 +1957,10 @@ static void device_decode() {
 }
 
 // ---------------------------------------------------------------------------
-//  دستگاه — بخش حواس: متن انسان → بیت → نیمه‌ی الف لوب ورودی
+//  دستگاه — بخش حواس: متن فارسی → بیت → نیمه‌ی الف لوب ورودی
+//  (مسیر مشترک انسان و معلمِ گویا — بند ۲۶)
 // ---------------------------------------------------------------------------
-static void device_say(const std::string& text) {
-    std::lock_guard<std::mutex> lk(g_mx);
-    ChatMsg m;
-    m.id = B.next_msg_id++;
-    m.from_human = true;
-    m.text = text;
-    m.t = (double)B.now / SEC;
-    B.chat.push_back(m);
-    if (B.chat.size() > 120) B.chat.erase(B.chat.begin());
-
+static void encode_to_input(const std::string& text) {
     // متن فارسی → نماد ۶ بیتی (معکوس همان الفبا)
     size_t i = 0;
     while (i < text.size()) {
@@ -1771,6 +1975,18 @@ static void device_say(const std::string& text) {
         i += len;
     }
     for (int b = 5; b >= 0; --b) B.in_queue.push_back(0);   // فاصله‌ی پایانی
+}
+
+static void device_say(const std::string& text) {
+    std::lock_guard<std::mutex> lk(g_mx);
+    ChatMsg m;
+    m.id = B.next_msg_id++;
+    m.from_human = true;
+    m.text = text;
+    m.t = (double)B.now / SEC;
+    B.chat.push_back(m);
+    if (B.chat.size() > 120) B.chat.erase(B.chat.begin());
+    encode_to_input(text);
 }
 
 // تزریق بیت‌ها به دو خط پایانی نورون‌های نیمه‌ی مربوطه‌ی لوب ورودی
@@ -1903,6 +2119,9 @@ static bool load_brain(const char* path) {
         if (has_plasticity) fread(&nu.plasticity,2,1,f); else nu.plasticity = 0;
         fread(&nu.last_fire,8,1,f); fread(&nu.last_input,8,1,f);
         fread(&nu.prog,4,1,f);
+        // فیلد own_prog ذخیره نمی‌شود؛ مشتق می‌شود — خانه‌های بالاتر از
+        // جدول بذر (۱۰ برنامه‌ی مشترک) کپیِ خصوصی جهش‌یافته‌اند.
+        nu.own_prog = (nu.prog >= PROG_SHARED_COUNT) ? 1 : 0;
         fread(&nu.rng.s,8,1,f);
         fread(&nu.in_bits,8,1,f);
         u32 msz=0; fread(&msz,4,1,f); nu.mem.resize(msz);
@@ -1932,6 +2151,14 @@ static bool load_brain(const char* path) {
         if (nu.state != S_DEAD) B.push(B.now + r.range(0, KIND_CADENCE[nu.kind]), nu.id, EV_EVAL);
     B.push(B.now + SYS_TICK, 0, EV_SYS);
     B.transit.clear(); B.transit_total = 0;
+
+    // شمارنده‌های پله‌ی دوم از صفر؛ مهلت سکوت از لحظه‌ی بارگذاری
+    B.mutates = B.mutate_spend = 0; B.next_mutate = 0; B.mutate_cursor = 0;
+    B.last_word_vt = B.now; B.silence_ticks = 0;
+    B.next_feed = B.now; B.words_fed = 0;
+    // درسِ ادامه نباید تکرارِ درسِ قبل باشد — بذرِ معلم با زمان ترکیب می‌شود
+    B.feed_rng = Rng(B.seed ^ 0x51ED270Bull ^ (u64)B.now);
+    g_prog_free.clear();
     return true;
 }
 
@@ -2378,6 +2605,12 @@ static void sim_loop() {
                 if (nu.state == S_DEAD && nu.cap > 0) {
                     B.lp[nu.lobe].alive--; B.lp[nu.lobe].cap_sum -= nu.cap;
                     B.lp[nu.lobe].deaths_window++; nu.cap = 0;
+                    // جای برنامه‌ی خصوصیِ جهش‌یافته آزاد می‌شود تا نورون
+                    // تازه‌ای همان خانه را خرج کند (ضد رشد بی‌اندازه‌ی جدول).
+                    if (nu.own_prog) {
+                        g_prog_free.push_back(nu.prog);
+                        nu.own_prog = 0; nu.prog = 0;
+                    }
                 }
         }
         // رمزگشایی در همان پنجره انجام می‌شود تا in_src هنوز همان مسیر علّی
@@ -3154,6 +3387,9 @@ static void print_usage(const char* exe) {
         "    --talk N               پرحرفی ۱۰ تا ۴۰۰ درصد (پیش‌فرض 100)\n"
         "    --rewire               پله‌ی اول: سیم‌کشی مجدد پولی + انتخاب واقعی (پیش‌فرض خاموش)\n"
         "    --holdout N            N درصد واژه‌ها از پاداش کنار گذاشته شوند (سنجش تعمیم)\n"
+        "    --mutate               پله‌ی دوم: جهش پولی تابع داخلی نورون تنبیه‌شده (پیش‌فرض خاموش)\n"
+        "    --silence              جریمه‌ی سکوت: دهانِ بسته هم هزینه دارد (پیش‌فرض خاموش)\n"
+        "    --teach-feed N         معلم هر N ثانیه مجازی یک واژه‌ی واقعی می‌گوید (۰ = خاموش)\n"
         "    -h, --help             همین راهنما\n"
         "\n"
         "  example: %s --neurons 32000 --port 8420 --words persian_words.tsv\n"
@@ -3184,6 +3420,9 @@ int main(int argc, char** argv) {
         else if (a == "--words")      g_words_path = nxt();
         else if (a == "--user-words") g_user_words_path = nxt();
         else if (a == "--rewire")     g_rewire.store(1);
+        else if (a == "--mutate")     g_mutate.store(1);
+        else if (a == "--silence")    g_silence.store(1);
+        else if (a == "--teach-feed") g_teach_feed.store(std::max(0, std::min(3600, atoi(nxt()))));
         else if (a == "--talk")       g_talkativeness.store(std::max(10, std::min(400, atoi(nxt()))));
         else if (a == "--holdout")    g_holdout.store(std::max(0, std::min(90, atoi(nxt()))));
         else if (a == "--teacher-strength")
@@ -3304,20 +3543,28 @@ int main(int argc, char** argv) {
             printf("  پلاستیسیته: avg=%+.2f positive=%lld negative=%lld\n",
                    (double)psum / std::max<size_t>(1, B.n.size()),
                    (long long)ppos, (long long)pneg);
+            i64 own = 0;
+            for (const auto& nu : B.n) if (nu.own_prog) own++;
+            printf("  پله‌ی دوم: mutates=%lld (سوخت %lld مانا) · برنامه‌های خصوصی=%lld · "
+                   "جریمه‌ی سکوت=%lld · واژه‌های معلم=%lld\n",
+                   (long long)B.mutates, (long long)(B.mutate_spend / MANA),
+                   (long long)own, (long long)B.silence_ticks, (long long)B.words_fed);
         }
         // خط ماشین‌خوان برای هارنس A/B — قالب ثابت، مقادیر با فاصله
         {
             size_t k = std::min<size_t>(10, B.words.size());
             double q_last = 0;
             for (size_t i = 0; i < k; ++i) q_last += B.words[B.words.size() - k + i].quality;
-            i64 dead = 0, eworth_neg = 0;
+            i64 dead = 0, eworth_neg = 0, own = 0;
             for (const auto& nu : B.n) {
                 if (nu.state == S_DEAD) dead++;
+                if (nu.own_prog) own++;
                 for (const auto& e : nu.out) if (e.worth < 0) eworth_neg++;
             }
             printf("RESULT seed=%llu neurons=%zu rewire=%d holdout=%d "
                    "words=%lld exact=%lld exactpct=%.4f held=%lld heldpct=%.4f "
-                   "avgQ=%.4f lastQ=%.4f dead=%lld rewires=%lld negedges=%lld\n",
+                   "avgQ=%.4f lastQ=%.4f dead=%lld rewires=%lld negedges=%lld "
+                   "mutates=%lld own=%lld silence=%lld fed=%lld\n",
                    (unsigned long long)seed, B.n.size(),
                    g_rewire.load(), g_holdout.load(),
                    (long long)B.words_auto, (long long)B.words_exact,
@@ -3326,7 +3573,9 @@ int main(int argc, char** argv) {
                    100.0 * B.words_held / std::max<i64>(1, B.words_auto),
                    B.quality_sum / std::max<i64>(1, B.words_auto),
                    k ? q_last / k : 0.0,
-                   (long long)dead, (long long)B.rewires, (long long)eworth_neg);
+                   (long long)dead, (long long)B.rewires, (long long)eworth_neg,
+                   (long long)B.mutates, (long long)own,
+                   (long long)B.silence_ticks, (long long)B.words_fed);
         }
         save_brain("brain.dat");
         printf("\n  ذخیره شد: brain.dat\n");
