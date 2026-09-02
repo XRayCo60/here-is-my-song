@@ -239,6 +239,51 @@ rung-2 curves above which used identical flags minus sprouting):
 - The word-volume decay over hours is still the dominant unsolved problem; sprouting
   changes *what* survives, not the slide toward silence.
 
+## Repetition is memory, not evasion — judge fix (band 36)
+
+The judge used to take **−18 per repeat** of a word. That was a major driver of the
+word-volume decay: the brain fled repetition into either novel garbage or silence. But
+repetition means the word-producing path stayed stable — the memory works — which is
+exactly what should be *hardening*. Per the design intent ("we want the paths that produce
+meaningful words to become engraved"):
+
+- Spaced recall (word seen 1–3 times in the last 24 words, not consecutive): **+5**
+- Back-to-back streak: **−5 × streak** (small — that's spam, not memory)
+- Excessive (more than 3 in the window): **−5 × excess** (small)
+
+### First significantly positive result of the project
+
+10 seeds, 600s, identical flags on both arms (`--teach-feed 3 --silence --mutate --sprout 5`);
+only the judge differs (old binary vs new, paired t-test df=9):
+
+| metric | old judge | new judge | diff | t |
+|---|---|---|---|---|
+| avg quality | 14.06 | **20.84** | **+6.78** | **+8.31** |
+| last-10-words quality | 13.30 | **24.18** | **+10.88** | **+3.88** |
+| exact % | 6.66 | 8.31 | +1.65 | +1.59 |
+| words | 176.9 | 185.0 | +8.1 | +0.38 |
+
+Quality jumped **without** losing volume — a real improvement, not quiet-hiding (the trap
+rungs 1–2 fell into). Last-words quality nearly doubling is consistent with paths gradually
+hardening. Word diversity stays at 65% (avg 121 distinct words per run) — memory without
+spam-farming. New `distinct=` key in the RESULT line measures this.
+
+<!-- NEWJUDGE_LONGRUN_RESULTS -->
+
+### Long run (3 virtual hours, 9×1200s, sprouting+mutate+silence), new judge vs old
+
+Seed 2: the old judge's word count collapsed to **9 words** by hours 2–3 (with a misleading
+22% exact on those 9 words — near-silence). New judge: 135, 116, 291, 34, 113, 83, 45, 41, 38
+— gradual decline from peak, no collapse to zero; avg quality stays in 16–27 the whole way.
+
+Seed 1: old judge crashed to 1 and 10 words mid-run; new judge: 305, 18, 103, 167, 205, 123,
+178, 18, 20 — mean exact 6.3% → 8.3%, no crash but a low-volume tail remains.
+
+Bottom line: the heavy repeat penalty was a main driver of the word-volume decay. Removing
+it kept quality stable across the full run, stopped the collapse to ~9 words, and eliminated
+the "reward-collecting silence" artifact. A slow late-hours volume decline remains — next
+suspect: accumulated negative plasticity.
+
 ## CUDA test on Windows
 
 Requirements:

@@ -1935,10 +1935,26 @@ static JudgeResult judge_word(const std::string& raw, int mode) {
     if (a.size() >= 2 && distinct.size() == 1) R.quality -= 20;
     if (a.size() == 1 && w != "و") R.quality = std::min(R.quality, 20);
     R.quality -= punctuation * 4;
-    int repeats = 0;
-    for (auto itw = B.words.rbegin(); itw != B.words.rend() && repeats < 4; ++itw)
-        if (normalize_word(itw->text) == w) repeats++;
-    R.quality -= repeats * 18;
+    // --- تکرار (بند ۳۶): حافظه‌ی کارکن، نه تنبیه‌گریزی ---
+    // تکرارِ یک واژه نشانه‌ی خوبی است: مسیرِ واژه‌ساز پایدار مانده و حافظه
+    // درست کار می‌کند — دقیقاً همان چیزی که باید «حک شود». پس یادآوریِ
+    // فاصله‌دار پاداشِ کوچک می‌گیرد؛ فقط پشت‌سرهم بودن یا پرتکراریِ زیاد
+    // جریمه‌ی کوچک می‌گیرد (آن دیگر حافظه نیست، اسپم است).
+    //     پنجره: ۲۴ واژه‌ی اخیر. streak = تکرارِ بلافاصله پشت‌سرهم.
+    //     recall ۱..۳ با فاصله → +۵   |   streak>0 → −۵×streak
+    //     recall > ۳ در پنجره → −۵×مازاد
+    // (تا پیش از این: −۱۸ به ازای هر تکرار — سهم بزرگی از «پوسیدگی واژه»
+    //  و عقب‌نشینی به سکوت دقیقاً از همین‌جا می‌آمد.)
+    int recall = 0, streak = 0, scanned_r = 0;
+    for (auto itw = B.words.rbegin(); itw != B.words.rend() && scanned_r < 24;
+         ++itw, ++scanned_r) {
+        if (normalize_word(itw->text) != w) continue;
+        ++recall;
+        if (streak == scanned_r) ++streak;   // فقط از ابتدای پنجره پشت‌سرهم
+    }
+    if      (streak > 0)   R.quality -= 5 * streak;         // پشت‌سرهم — کم
+    else if (recall > 3)   R.quality -= 5 * (recall - 3);   // پرتکرار — کم
+    else if (recall > 0)   R.quality += 5;                  // یادآوری فاصله‌دار
     R.quality = std::max(0, std::min(100, R.quality));
     return R;
 }
@@ -3708,11 +3724,14 @@ int main(int argc, char** argv) {
                 if (nu.own_prog) own++;
                 for (const auto& e : nu.out) if (e.worth < 0) eworth_neg++;
             }
+            // تنوع واژه (در ۲۵۰ واژه‌ی اخیر) — حافظه‌ی کارکن در برابر اسپمِ تک‌واژه
+            std::unordered_set<std::string> uniq;
+            for (const auto& w : B.words) uniq.insert(normalize_word(w.text));
             printf("RESULT seed=%llu neurons=%zu rewire=%d holdout=%d "
                    "words=%lld exact=%lld exactpct=%.4f held=%lld heldpct=%.4f "
                    "avgQ=%.4f lastQ=%.4f dead=%lld rewires=%lld negedges=%lld "
                    "mutates=%lld own=%lld silence=%lld fed=%lld "
-                   "sprouts=%lld pop=%zu\n",
+                   "sprouts=%lld pop=%zu distinct=%zu\n",
                    (unsigned long long)seed, B.n.size(),
                    g_rewire.load(), g_holdout.load(),
                    (long long)B.words_auto, (long long)B.words_exact,
@@ -3724,7 +3743,7 @@ int main(int argc, char** argv) {
                    (long long)dead, (long long)B.rewires, (long long)eworth_neg,
                    (long long)B.mutates, (long long)own,
                    (long long)B.silence_ticks, (long long)B.words_fed,
-                   (long long)B.sprouts, B.n.size());
+                   (long long)B.sprouts, B.n.size(), uniq.size());
         }
         save_brain("brain.dat");
         printf("\n  ذخیره شد: brain.dat\n");
