@@ -20,3 +20,6 @@ smile-gpu.exe
 .idea/
 .DS_Store
 Thumbs.db
+
+# windows longrun logs
+longrun_win_seed*.txt
