@@ -11,8 +11,9 @@
 #  مثال — ۳ ساعت مجازی (۹ قطعه‌ی ۲۰ دقیقه‌ای):
 #     bench/longrun.sh 1 9 1200 1000
 #
-#  فلگ‌ها با متغیر محیطی FLAGS (پیش‌فرض: پله‌ی دوم + معلم گویا):
-#     FLAGS='--teach-feed 3 --silence --mutate' bench/longrun.sh 1 9 1200 1000
+#  فلگ‌ها با متغیر محیطی FLAGS (پیش‌فرض: درد خالص — بند ۳۷؛ teach-feed حذف شد،
+#  مغز نباید واژه‌ها را بشنود، باید با درد کشفشان کند):
+#     FLAGS='--silence --mutate --sprout 5' bench/longrun.sh 1 9 1200 1000
 # ---------------------------------------------------------------------------
 set -u
 cd "$(dirname "$0")/.."
@@ -24,7 +25,7 @@ NEUR=${4:-1000}
 STRENGTH=${STRENGTH:-60}
 HOLDOUT=${HOLDOUT:-10}
 TALK=${TALK:-400}
-FLAGS=${FLAGS:---teach-feed 3 --silence --mutate}
+FLAGS=${FLAGS:---silence --mutate --sprout 5}
 
 BIN=${BIN:-./bench/smile-bench}
 if [ ! -x "$BIN" ]; then

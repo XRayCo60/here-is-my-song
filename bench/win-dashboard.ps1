@@ -18,6 +18,9 @@
 #  خروج تمیز: اول در داشبورد «ذخیره» بزنید، بعد در پاورشل Ctrl+C.
 #  (Ctrl+C بدون ذخیره‌ی قبلی، مغز را بدون brain.dat می‌بندد)
 # ============================================================================
+#  اصل پروژه (بند ۳۷): تنها کانال یادگیری «درد» (مانا) است. معلم واژه می‌گوید؟
+#  نه — teach-feed از دستور استاندارد حذف شد؛ مغز باید خودش کشف کند کدام
+#  واژه‌ها معنا دارند. برای آزمایش کنترل‌شده می‌توانید با -ExtraFlags برگردانید.
 param(
     [int]$Seed = 1,
     [int]$Neurons = 1000,
@@ -25,7 +28,7 @@ param(
     [int]$Strength = 60,
     [int]$Holdout = 10,
     [int]$Talk = 400,
-    [string]$ExtraFlags = '--teach-feed 3 --silence --mutate --sprout 5',
+    [string]$ExtraFlags = '--silence --mutate --sprout 5',
     [double]$CpuCap = 0.5,
     [switch]$KeepDisplayOn,
     [switch]$NormalPriority,

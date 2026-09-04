@@ -106,6 +106,10 @@ Section 34 of `ARCHITECTURE.md` in full. Three new opt-in flags, all default **o
   says one verified word through the same input codec a human uses. Until now the brain
   **never heard a real word** in headless runs (only its own mirror). Fed words are always
   outside the held-out set.
+  **Removed from the standard recipe (§37):** telling the brain real words violates the
+  project's core rule — the brain must discover by itself which words mean something, and
+  the only allowed teaching channel is pain (mana). The flag stays in the code (default 0)
+  for controlled experiments only; no standard run passes it anymore.
 
 Mutation also exposed a latent VM bug: `INT_MIN / −1` (and `INT_MIN % −1`) in `OP_DIV`/
 `OP_MOD` raises `SIGFPE` and kills the whole process. Seed programs never reach it (small
@@ -291,8 +295,10 @@ suspect: accumulated negative plasticity.
 - uses the **prebuilt `bench\smile-bench.exe`** that ships in the repo (statically
   linked, imports only OS DLLs + UCRT — no compiler install needed; `-Rebuild`
   recompiles from source with MinGW-w64 g++ if you have one),
-- runs the 9×1200s segmented long run with the full flag set
-  (`--teach-feed 3 --silence --mutate --sprout 5`), chaining checkpoints via `brain.dat`,
+- runs the 9×1200s segmented long run with the **pain-only flag set**
+  (`--silence --mutate --sprout 5` — no `--teach-feed`; §37: the only teaching channel
+  is pain, the brain must find meaningful words by itself), chaining checkpoints via
+  `brain.dat`,
 - caps the process to half your logical cores (`-CpuCap`, default 0.5) and sets priority
   BelowNormal, so the laptop stays responsive,
 - keeps the system awake for the whole run via `SetThreadExecutionState` and reverts it
@@ -312,6 +318,10 @@ exact% 5.4, mean words 92, mean avgQ 21.4, pop 1000→1030. Word volume never co
 new-judge signature reproduces on different hardware/compiler. (Windows runs are not
 bit-identical to Linux builds — FP differences diverge trajectories — only the
 statistical pattern is comparable.)
+
+Note: this run was made with the **old** recipe (`--teach-feed 3 ...`) — it is the last
+teach-fed witness. Runs after §37 are pain-only and not directly comparable; how much of
+the learning came from hearing words vs. from pain is itself the next experiment.
 
 Run from the repo root:
 
