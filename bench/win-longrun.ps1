@@ -17,11 +17,12 @@
 #     ... -Segs 3 -SegSecs 600        (ران کوتاه‌تر)
 #     ... -CpuCap 0.25                (سقف ۲۵٪)
 #     ... -KeepDisplayOn              (صفحه هم خاموش نشود)
+#     ... -Rebuild                    (کامپایل دوباره از سورس)
 #
-#  پیش‌نیاز: g++ (MinGW-w64) — یکی از این دو:
-#     winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT
-#     winget install -e --id MSYS2.MSYS2        (اسکریپت خودش C:\msys64 را می‌یابد)
-#  بعد از نصب، پنجره‌ی ترمینال را ببندید و دوباره باز کنید.
+#  پیش‌نیاز: هیچ — باینری از پیش ساخته‌شده داخل ریپو است (bench\smile-bench.exe،
+#  استاتیک، فقط به DLLهای خود ویندوز وابسته است). فقط برای -Rebuild کامپایلر
+#  لازم است؛ نصب (اگر msstore تایم‌اوت داد، --source winget را حتماً نگه دارید):
+#     winget install --source winget -e --id BrechtSanders.WinLibs.POSIX.UCRT
 # ============================================================================
 param(
     [int]$Seed = 1,
@@ -33,7 +34,7 @@ param(
     [int]$Talk = 400,
     [string]$ExtraFlags = '--teach-feed 3 --silence --mutate --sprout 5',
     [double]$CpuCap = 0.5,
-    [switch]$NoBuild,
+    [switch]$Rebuild,
     [switch]$KeepDisplayOn,
     [switch]$NormalPriority
 )
@@ -43,7 +44,7 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 # ----------------------------------------------------------------------------
-# ۰) پیداکردن کامپایلر g++ — از PATH یا محل‌های نصب رایج
+#  ۰) کامپایلر — فقط برای -Rebuild لازم می‌شود (باینری از پیش‌ساخته داخل ریپو است)
 # ----------------------------------------------------------------------------
 function Find-Gxx {
     $c = Get-Command g++ -ErrorAction SilentlyContinue
@@ -59,25 +60,21 @@ function Find-Gxx {
 }
 
 $bin = Join-Path $root 'bench\smile-bench.exe'
-if ((-not $NoBuild) -or (-not (Test-Path $bin))) {
+if ((Test-Path $bin) -and (-not $Rebuild)) {
+    Write-Host '[build] using prebuilt bench\smile-bench.exe (-Rebuild to recompile from source)'
+} else {
     $gxx = Find-Gxx
     if (-not $gxx) {
-        Write-Host 'g++ (MinGW-w64) not found.' -ForegroundColor Red
-        Write-Host 'Install ONE of these, then close and reopen the terminal:'
-        Write-Host '  winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT'
-        Write-Host '  winget install -e --id MSYS2.MSYS2'
+        Write-Host 'bench\smile-bench.exe not found and no g++ available to build it.' -ForegroundColor Red
+        Write-Host 'Re-download the repo zip (it ships a prebuilt exe), or install a compiler:'
+        Write-Host '  winget install --source winget -e --id BrechtSanders.WinLibs.POSIX.UCRT'
+        Write-Host '  winget install --source winget -e --id MSYS2.MSYS2'
         exit 1
     }
-    $srcT = (Get-Item (Join-Path $root 'smile.cpp')).LastWriteTime
-    $fresh = (Test-Path $bin) -and ((Get-Item $bin).LastWriteTime -ge $srcT)
-    if ($fresh) {
-        Write-Host '[build] bench\smile-bench.exe is up to date (-NoBuild skips this check)'
-    } else {
-        Write-Host "[build] $gxx -O2 -std=c++17 -pthread -static smile.cpp"
-        & $gxx -O2 -std=c++17 -pthread -static smile.cpp -o $bin -lws2_32
-        if ($LASTEXITCODE -ne 0) { throw "build failed (exit code $LASTEXITCODE)" }
-        Write-Host '[build] OK'
-    }
+    Write-Host "[build] $gxx -O2 -std=c++17 -pthread -static smile.cpp"
+    & $gxx -O2 -std=c++17 -pthread -static smile.cpp -o $bin -lws2_32
+    if ($LASTEXITCODE -ne 0) { throw "build failed (exit code $LASTEXITCODE)" }
+    Write-Host '[build] OK'
 }
 
 # ----------------------------------------------------------------------------

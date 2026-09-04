@@ -288,7 +288,9 @@ suspect: accumulated negative plasticity.
 
 `bench/win-longrun.ps1` is the Windows twin of `bench/longrun.sh`. It:
 
-- builds `bench\smile-bench.exe` with MinGW-w64 g++ if needed (static, no DLL hassle),
+- uses the **prebuilt `bench\smile-bench.exe`** that ships in the repo (statically
+  linked, imports only OS DLLs + UCRT — no compiler install needed; `-Rebuild`
+  recompiles from source with MinGW-w64 g++ if you have one),
 - runs the 9×1200s segmented long run with the full flag set
   (`--teach-feed 3 --silence --mutate --sprout 5`), chaining checkpoints via `brain.dat`,
 - caps the process to half your logical cores (`-CpuCap`, default 0.5) and sets priority
@@ -297,27 +299,20 @@ suspect: accumulated negative plasticity.
   automatically at the end (or on Ctrl+C),
 - appends each segment's RESULT line to `longrun_win_seed<N>.txt` and prints a summary.
 
-The Windows build is verified to compile cleanly for the x86_64-w64-mingw32 target.
-
-One-time compiler install (pick one, then close and reopen the terminal):
-
-```
-winget install -e --id MSYS2.MSYS2
-winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT
-```
-
-(The script auto-finds g++ in PATH, the winget links dir, `C:\msys64\mingw64\bin`, and
-`C:\mingw64\bin` — no manual PATH setup.)
+The prebuilt exe is clang/zig-built for x86_64-w64-mingw32 (verified: compiles clean,
+imports only WS2_32/KERNEL32/SHELL32/UCRT). If `winget` times out on msstore (some
+networks), keep `--source winget`: `winget install --source winget -e --id
+BrechtSanders.WinLibs.POSIX.UCRT`.
 
 Run from the repo root:
 
 ```
-powershell -ExecutionPolicy Bypass -File bench\win-longrun.ps1            :: seed 1
-powershell -ExecutionPolicy Bypass -File bench\win-longrun.ps1 -Seed 2    :: seed 2
+powershell -NoProfile -ExecutionPolicy Bypass -File bench\win-longrun.ps1            :: seed 1
+powershell -NoProfile -ExecutionPolicy Bypass -File bench\win-longrun.ps1 -Seed 2    :: seed 2
 ```
 
 Useful switches: `-Segs 3 -SegSecs 600` (shorter run), `-CpuCap 0.25` (stricter cap),
-`-KeepDisplayOn` (screen stays on), `-NormalPriority`, `-NoBuild`.
+`-KeepDisplayOn` (screen stays on), `-Rebuild` (recompile), `-NormalPriority`.
 
 Notes:
 
