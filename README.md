@@ -304,6 +304,15 @@ imports only WS2_32/KERNEL32/SHELL32/UCRT). If `winget` times out on msstore (so
 networks), keep `--source winget`: `winget install --source winget -e --id
 BrechtSanders.WinLibs.POSIX.UCRT`.
 
+### First laptop run (8 logical cores, 50% cap, prebuilt exe)
+
+Seed 1, full 9×1200s in 21 min wall (user's machine, no compiler installed): mean
+exact% 5.4, mean words 92, mean avgQ 21.4, pop 1000→1030. Word volume never collapsed
+(min 48 per segment, run ends at 115 words) and avgQ stays 18–26 throughout — the
+new-judge signature reproduces on different hardware/compiler. (Windows runs are not
+bit-identical to Linux builds — FP differences diverge trajectories — only the
+statistical pattern is comparable.)
+
 Run from the repo root:
 
 ```
