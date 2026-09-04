@@ -323,6 +323,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File bench\win-longrun.ps1 -Seed 
 Useful switches: `-Segs 3 -SegSecs 600` (shorter run), `-CpuCap 0.25` (stricter cap),
 `-KeepDisplayOn` (screen stays on), `-Rebuild` (recompile), `-NormalPriority`.
 
+### Live dashboard (browser) — `bench/win-dashboard.ps1`
+
+The longrun script intentionally runs a **headless fixed 9-segment experiment** (that's
+why it exits by itself and prints numeric RESULT lines). To watch the brain live instead:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File bench\win-dashboard.ps1
+```
+
+The browser opens automatically at http://localhost:8420 and the sim runs until you stop
+it. Same CPU cap, priority, and sleep prevention. The dashboard's save button writes
+`brain.dat` (pause + save); run again with `-Load` to continue that brain. Clean exit:
+press save in the dashboard first, then Ctrl+C in PowerShell.
+
 Notes:
 
 - Idle sleep is prevented, but closing the lid still sleeps the laptop — keep the lid open
