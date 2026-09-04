@@ -31,7 +31,7 @@ param(
     [int]$Seed = 1,
     [int]$Segs = 9,
     [int]$SegSecs = 1200,
-    [int]$Neurons = 1000,
+    [int]$Neurons = 32000,   # مقیاس واقعی پروژه (بند ۳۸) — ۱۰۰۰ فقط مقیاس пилوت بود
     [int]$Strength = 60,
     [int]$Holdout = 10,
     [int]$Talk = 400,

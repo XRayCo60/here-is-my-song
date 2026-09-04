@@ -310,6 +310,13 @@ imports only WS2_32/KERNEL32/SHELL32/UCRT). If `winget` times out on msstore (so
 networks), keep `--source winget`: `winget install --source winget -e --id
 BrechtSanders.WinLibs.POSIX.UCRT`.
 
+**Scale (§38):** runs now default to **32000 neurons** (the real project scale; all
+earlier witnesses were 1000-neuron pilots). Expect ~24× slower than 1000: on the
+8-core laptop with the default 50% cap, one 1200s segment ≈ 70–80 min wall and the
+full 9×1200s run ≈ 9–12 h — an overnight run; add `-KeepDisplayOn`. For a quick
+calibration first: `-Segs 1 -SegSecs 300` (≈ 20 min). `-Neurons 1000` still works
+for pilot runs.
+
 ### First laptop run (8 logical cores, 50% cap, prebuilt exe)
 
 Seed 1, full 9×1200s in 21 min wall (user's machine, no compiler installed): mean

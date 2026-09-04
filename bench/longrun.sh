@@ -21,7 +21,7 @@ cd "$(dirname "$0")/.."
 SEED=${1:-1}
 SEGS=${2:-9}
 SECS=${3:-1200}
-NEUR=${4:-1000}
+NEUR=${4:-32000}   # مقیاس واقعی پروژه (بند ۳۸)
 STRENGTH=${STRENGTH:-60}
 HOLDOUT=${HOLDOUT:-10}
 TALK=${TALK:-400}
