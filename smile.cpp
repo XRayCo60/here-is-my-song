@@ -1954,7 +1954,7 @@ static JudgeResult judge_word(const std::string& raw, int mode) {
     }
     if      (streak > 0)   R.quality -= 5 * streak;         // پشت‌سرهم — کم
     else if (recall > 3)   R.quality -= 5 * (recall - 3);   // پرتکرار — کم
-    else if (recall > 0)   R.quality += 5;                  // یادآوری فاصله‌دار
+    else if (recall > 0 && R.exact) R.quality += 5;        // یادآوری فاصله‌دار — فقط واژه‌ی واقعی (بند ۳۹)
     R.quality = std::max(0, std::min(100, R.quality));
     return R;
 }
@@ -2032,7 +2032,14 @@ static void device_close_word() {
             advantage = J.quality - baseline_before;
             B.teacher_baseline[mode] = 0.92 * baseline_before + 0.08 * J.quality;
         }
-        if (J.exact && J.quality >= 40) advantage = std::max(5.0, advantage);
+        // بند ۳۹ (معلم سخت‌گیر): مثبتِ کامل فقط برای واژه‌ی واقعی.
+        // شواهد: ۸۴٪ پاداش‌های مثبت به واژه‌های بی‌معنا می‌رفت («دقی»، «بدد»،
+        // «کعکت»...) چون نمره‌ی املا به gibberishِ روان‌نما سخاوتمند است و
+        // مزیتِ نسبی مثبت می‌شود. از این پس واژه‌ی غیردیکشنری سقف مثبتِ
+        // کوچک دارد (حداکثر +۶ مزیت ≈ نیمی از کفِ واژه‌ی واقعی) — برای
+        // بوstrapِ اولیه کافی است ولی مزرعه‌ی پاداش نمی‌شود.
+        if (J.exact && J.quality >= 40) advantage = std::max(12.0, advantage);
+        if (advantage > 0 && !J.exact) advantage = std::min(advantage, 6.0);
         advantage = std::max(-40.0, std::min(40.0, advantage));
         int strength = g_teacher_strength.load(std::memory_order_relaxed);
         i64 reward = (i64)std::llround(advantage * strength / 8.0);

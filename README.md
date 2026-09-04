@@ -310,6 +310,14 @@ imports only WS2_32/KERNEL32/SHELL32/UCRT). If `winget` times out on msstore (so
 networks), keep `--source winget`: `winget install --source winget -e --id
 BrechtSanders.WinLibs.POSIX.UCRT`.
 
+**Strict teacher (§39):** positive reward is now meaning-gated — non-dictionary
+words can earn at most +45m (advantage cap +6) while every verified word earns at
+least +90m (floor +12, up to +300m). Before, 84% of positive rewards went to
+fluent-looking gibberish («دقی» +277m); the letter-statistics spelling score was too
+generous. The spaced-recall bonus (+5) now applies only to real words too. The
+Windows exe was rebuilt with this change — re-download it (see below) before your
+next run.
+
 **Scale (§38):** runs now default to **32000 neurons** (the real project scale; all
 earlier witnesses were 1000-neuron pilots). Expect ~24× slower than 1000: on the
 8-core laptop with the default 50% cap, one 1200s segment ≈ 70–80 min wall and the
