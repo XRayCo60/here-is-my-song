@@ -1,0 +1,25 @@
+# generated checkpoints
+brain.dat
+brain-before-*.dat
+*.dat.tmp
+
+# build output
+smile
+smile.exe
+smile-gpu
+smile-gpu.exe
+*.o
+*.obj
+*.exp
+*.lib
+*.pdb
+*.ilk
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# windows longrun logs
+longrun_win_seed*.txt
