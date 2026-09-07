@@ -395,6 +395,7 @@ struct OutWord {
     double      teacher_advantage = 0;
     u8          teacher_mode = 0;  // ۱ املایی · ۲ دیکشنری · ۳ ترکیبی
     bool        exact = false;     // عضو دقیق واژه‌نامه
+    bool        held  = false;     // واژه‌ی کنارگذاشته — کشف تعمیم (بند ۴۰)
     bool        scored = false;
     bool        auto_scored = false;
     bool        manual_scored = false;
@@ -427,7 +428,7 @@ struct Stats {
     std::vector<OutWord> words;
     std::vector<ChatMsg> chat;
     i64 words_total = 0, words_scored = 0;
-    i64 words_auto = 0, words_manual = 0, words_exact = 0;
+    i64 words_auto = 0, words_manual = 0, words_exact = 0, words_held = 0;
     i64 words_positive = 0, words_negative = 0, words_neutral = 0;
     i64 plasticity_positive = 0, plasticity_negative = 0;
     double plasticity_avg = 0;
@@ -2015,6 +2016,7 @@ static void device_close_word() {
         w.dictionary_quality = J.dictionary;
         w.teacher_mode = (u8)mode;
         w.exact = J.exact;
+        w.held  = J.held;
         B.quality_sum += J.quality;
         if (J.exact) B.words_exact++;
         if (J.held)  B.words_held++;
@@ -2044,6 +2046,10 @@ static void device_close_word() {
         int strength = g_teacher_strength.load(std::memory_order_relaxed);
         i64 reward = (i64)std::llround(advantage * strength / 8.0);
         reward = std::max<i64>(-500, std::min<i64>(500, reward));
+        // بند ۴۰: واژه‌ی کنارگذاشته هیچ سیگنالی نمی‌گیرد — نه مثبت نه منفی.
+        // آزمون تعمیم باید خالص بماند؛ تا پیش از این از راه نمره‌ی املایی
+        // نشتی می‌کرد (مثلاً «نث» holdout بود و +۳۴m می‌گرفت).
+        if (J.held) reward = 0;
 
         w.teacher_baseline = baseline_before;
         w.teacher_advantage = advantage;
@@ -2368,6 +2374,7 @@ static void snapshot(double wall) {
     s.words_auto   = B.words_auto;
     s.words_manual = B.words_manual;
     s.words_exact  = B.words_exact;
+    s.words_held   = B.words_held;
     s.words_positive = B.words_positive;
     s.words_negative = B.words_negative;
     s.words_neutral  = B.words_neutral;
@@ -2892,7 +2899,7 @@ input[type=range]{width:130px;vertical-align:middle}
 .judge-table td{padding:6px 8px;border-bottom:1px solid #121b28;text-align:center;white-space:nowrap}
 .judge-table tr:hover td{background:#101927}.judge-table .wordcell{font:13px monospace;color:#dfe7f0;direction:rtl}
 .judge-table .pos{color:#3ddc84;font-weight:700}.judge-table .neg{color:#ff6b6b;font-weight:700}
-.judge-table .zero{color:#75879e}.judge-table .exactyes{color:#4da3ff}.judge-table .manualscore{color:#c792ea}
+.judge-table .zero{color:#75879e}.judge-table .exactyes{color:#4da3ff}.judge-table .manualscore{color:#c792ea}.judge-table .heldword{color:#e8b34b;font-weight:bold}
 select{background:#141d29;color:#dfe7f0;border:1px solid #2a3a52;border-radius:6px;
        padding:5px 8px;font-family:inherit}
 .stream{background:#080b10;border:1px solid #1b2534;border-radius:8px;padding:12px;
@@ -2987,6 +2994,7 @@ select{background:#141d29;color:#dfe7f0;border:1px solid #2a3a52;border-radius:6
       <span>داوری خودکار <b id="wat">۰</b></span>
       <span>دستی <b id="wmt">۰</b></span>
       <span>عضو واژه‌نامه <b id="wex">۰</b> (<b id="wexr">۰٪</b>)</span>
+      <span style="color:#e8b34b">کشف holdout <b id="whd">۰</b></span>
       <span>میانگین کیفیت <b id="wq">۰</b>/۱۰۰</span>
       <span>میانگین سیگنال <b id="waa">۰</b></span>
       <span>خط پایه <b id="wbase">۰</b></span>
@@ -3096,7 +3104,7 @@ function renderJudgeTable(words){
       <td><b>${auto?fa(w.q||0):'—'}</b></td><td>${auto?fnum(w.bl||0,1):'—'}</td>
       <td>${auto?signed(w.av||0,1):'—'}</td><td class="${rc}">${auto?signed(ar,3):'—'}</td>
       <td class="${mc}">${manual?signed(mr,1):'—'}</td>
-      <td class="${w.x?'exactyes':'zero'}">${w.x?'بله':'خیر'}</td><td>${fa(w.tr||0)}</td>
+      <td class="${w.x?'exactyes':(w.h?'heldword':'zero')}">${w.x?'بله':(w.h?'holdout':'خیر')}</td><td>${fa(w.tr||0)}</td>
     </tr>`;
   }).join('');
 }
@@ -3141,6 +3149,7 @@ async function tick(){
   document.getElementById('wmt').textContent=fa(s.wmanual||0);
   document.getElementById('wex').textContent=fa(s.wexact||0);
   document.getElementById('wexr').textContent=fnum((s.wauto||0)?(s.wexact||0)*100/s.wauto:0,1)+'٪';
+  document.getElementById('whd').textContent=fa(s.wheld||0);
   document.getElementById('wq').textContent=fnum(s.wquality||0,1);
   document.getElementById('waa').textContent=signed(s.aavg||0,3);
   document.getElementById('wbase').textContent=fnum(s.tbase||0,1);
@@ -3322,7 +3331,7 @@ static std::string json_stats() {
 
     snprintf(buf, sizeof buf,
              "\"wtotal\":%lld,\"wscored\":%lld,\"wavg\":%.3f,"
-             "\"wauto\":%lld,\"wmanual\":%lld,\"wexact\":%lld,\"wquality\":%.2f,"
+             "\"wauto\":%lld,\"wmanual\":%lld,\"wexact\":%lld,\"wheld\":%lld,\"wquality\":%.2f,"
              "\"wpos\":%lld,\"wneg\":%lld,\"wzero\":%lld,"
              "\"pavg\":%.2f,\"ppos\":%lld,\"pneg\":%lld,"
              "\"areward\":%.3f,\"aavg\":%.4f,\"tbase\":%.2f,"
@@ -3330,6 +3339,7 @@ static std::string json_stats() {
              "\"lexwords\":%zu,\"lexsuggest\":%zu,\"lexblocked\":%zu,",
              (long long)s.words_total, (long long)s.words_scored, s.avg_score,
              (long long)s.words_auto, (long long)s.words_manual, (long long)s.words_exact,
+             (long long)s.words_held,
              s.avg_quality, (long long)s.words_positive, (long long)s.words_negative,
              (long long)s.words_neutral, s.plasticity_avg,
              (long long)s.plasticity_positive, (long long)s.plasticity_negative,
@@ -3357,13 +3367,14 @@ static std::string json_stats() {
                  "%s{\"id\":%u,\"t\":%.1f,\"s\":%.3f,\"d\":%s,"
                  "\"q\":%d,\"oq\":%d,\"dq\":%d,\"tm\":%u,"
                  "\"bl\":%.2f,\"av\":%.2f,\"ar\":%.3f,\"mr\":%.3f,"
-                 "\"x\":%s,\"a\":%s,\"m\":%s,\"tr\":%zu,\"w\":\"",
+                 "\"x\":%s,\"h\":%s,\"a\":%s,\"m\":%s,\"tr\":%zu,\"w\":\"",
                  i ? "," : "", w.id, w.t, (double)w.score_milli / MANA,
                  w.scored ? "true" : "false", w.quality,
                  w.spelling_quality, w.dictionary_quality, (unsigned)w.teacher_mode,
                  w.teacher_baseline, w.teacher_advantage,
                  (double)w.auto_reward / MANA, (double)w.manual_reward / MANA,
-                 w.exact ? "true" : "false", w.auto_scored ? "true" : "false",
+                 w.exact ? "true" : "false", w.held ? "true" : "false",
+                 w.auto_scored ? "true" : "false",
                  w.manual_scored ? "true" : "false", w.trace.size());
         j += buf; j += esc(w.text); j += "\"}";
     }

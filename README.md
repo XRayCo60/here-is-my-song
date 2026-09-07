@@ -310,6 +310,14 @@ imports only WS2_32/KERNEL32/SHELL32/UCRT). If `winget` times out on msstore (so
 networks), keep `--source winget`: `winget install --source winget -e --id
 BrechtSanders.WinLibs.POSIX.UCRT`.
 
+**Holdout purity + visibility (§40):** held-out words now get exactly zero
+reward (before, they could still earn spelling-based positive mana — e.g. a held real
+word like «شیر» with spelling 82), so the generalization test is clean. The dashboard
+now shows **holdout** (orange) in the member column and a «کشف holdout» counter —
+producing a never-rewarded held-out word is the project's key generalization event and
+was previously invisible (looked identical to gibberish). Four everyday words missing
+from the Lilak dictionary (اخ، اوه، هوم، باشه) were added to `my_words.tsv`.
+
 **Strict teacher (§39):** positive reward is now meaning-gated — non-dictionary
 words can earn at most +45m (advantage cap +6) while every verified word earns at
 least +90m (floor +12, up to +300m). Before, 84% of positive rewards went to
