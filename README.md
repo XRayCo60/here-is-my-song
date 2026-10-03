@@ -288,6 +288,29 @@ it kept quality stable across the full run, stopped the collapse to ~9 words, an
 the "reward-collecting silence" artifact. A slow late-hours volume decline remains — next
 suspect: accumulated negative plasticity.
 
+## Permanent brain on the Linux server (one brain, forever)
+
+The server runs **one continuous brain** as a systemd service. First run records its
+birth certificate (`brain.birth`: wall-clock timestamp, seed, neuron count — shown in
+the dashboard header in the Persian calendar), every later run continues the same
+brain from `brain.dat`. Autosave every 600 virtual seconds; crash → automatic restart
+from the last checkpoint; clean stop → saves first.
+
+```bash
+bash bench/install-service.sh          # build + install + start smile-brain.service
+```
+
+Then open **`http://<server-ip>:8420`** from the laptop — full dashboard and control
+(pause/speed/temperature, talk to it, score words, save). The dashboard has **no
+authentication: keep it LAN/VPN-only, never port-forward it to the internet**
+(`sudo ufw allow 8420` opens the LAN port if the firewall is on).
+
+Service commands: `systemctl status smile-brain` · `sudo systemctl stop smile-brain`
+· `journalctl -u smile-brain -f`. Seed matters only on birth day
+(`SEED=... bash bench/install-service.sh`). The whole brain runs on the CPU (all
+cores); the GPUs run the separate CUDA validation core and future experiments — a
+full GPU port of the brain is future work, the validation core is its road builder.
+
 ## Run on Windows (PowerShell) — capped CPU, no laptop sleep
 
 `bench/win-longrun.ps1` is the Windows twin of `bench/longrun.sh`. It:

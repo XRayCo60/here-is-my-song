@@ -24,3 +24,4 @@ Thumbs.db
 # windows longrun logs
 longrun_win_seed*.txt
 multirun_seed*.txt
+brain.birth

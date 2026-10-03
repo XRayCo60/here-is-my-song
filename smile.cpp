@@ -569,6 +569,8 @@ static std::atomic<double> g_cpu_measured{0.0};  // درصد واقعی کل پ�
 static std::atomic<double> g_virtual_speed{0.0}; // ثانیه‌ی مجازی / ثانیه‌ی واقعی
 static std::atomic<bool> g_server_up{false};
 static vtime             g_stop_at = 0;      // ۰ = بی‌نهایت
+static int               g_autosave_s = 0;   // بند ۴۲: فاصله‌ی ثانیه‌ی مجازی ذخیره‌ی خودکار؛ ۰ = خاموش
+static std::string       g_birth_iso;        // بند ۴۲: شناسنامه‌ی تولد (brain.birth)
 
 // ============================================================================
 //  ۷. برنامه‌های بذر  —  توابع اولیه را ما می‌نویسیم (بند ۹)
@@ -2664,6 +2666,7 @@ static void sim_loop() {
     vtime v0  = B.now;
     vtime next_snap = B.now;
     vtime next_dec  = B.now;
+    vtime next_auto = B.now;                       // بند ۴۲: ذخیره‌ی خودکار
     auto cpu_sample_wall = clk::now();
     double cpu_sample_proc = process_cpu_seconds();
     vtime cpu_sample_vtime = B.now;
@@ -2826,6 +2829,10 @@ static void sim_loop() {
             if (T > 20) B.temperature.store(T - 1);
             next_dec = B.now + 5 * SEC;
         }
+        if (g_autosave_s > 0 && B.now >= next_auto) {   // بند ۴۲
+            save_brain("brain.dat");
+            next_auto = B.now + (vtime)g_autosave_s * SEC;
+        }
         if (g_shutdown_req.load()) {
             save_brain("brain.dat");
             g_shutdown_req.store(false);
@@ -2944,6 +2951,7 @@ select{background:#141d29;color:#dfe7f0;border:1px solid #2a3a52;border-radius:6
   <span class="tag">فاز ۲ · معلم خودکار</span>
   <span class="tag" title="تاریخ کامپایل — اگر قدیمی است، دوباره بساز">بیلد )HTML" __DATE__ " " __TIME__ R"HTML(</span>
   <span class="tag" id="vt">—</span>
+  <span class="tag" id="birth" style="color:#e8b34b">تولد: —</span>
   <span style="flex:1"></span>
   <button id="pause">توقف</button>
   <label class="dim">سرعت <input type="range" id="spd" min="0" max="20" value="10"><b id="spdv">۱×</b></label>
@@ -3111,6 +3119,7 @@ function renderJudgeTable(words){
 async function tick(){
   let s; try{ s=await (await fetch('/stats')).json(); }catch(e){ return; }
   document.getElementById('vt').textContent='زمان مجازی '+s.vt.toFixed(1)+'s';
+  if(s.birth) document.getElementById('birth').textContent='تولد: '+new Date(s.birth).toLocaleString('fa-IR',{dateStyle:'full',timeStyle:'short'});
   document.getElementById('alive').textContent=fa(s.alive);
   document.getElementById('deadn').textContent='مرده: '+fa(s.dead);
   document.getElementById('fhz').textContent=s.fire_hz.toFixed(2);
@@ -3285,7 +3294,7 @@ static std::string json_stats() {
     std::lock_guard<std::mutex> lk(g_mx);
     Stats& s = g_stats;
     char buf[4096];
-    std::string j = "{";
+    std::string j = "{\"birth\":\"" + g_birth_iso + "\",";
     snprintf(buf, sizeof buf,
         "\"vt\":%.3f,\"alive\":%lld,\"dead\":%lld,\"healthy\":%lld,\"ignoring\":%lld,"
         "\"spamming\":%lld,\"dormant\":%lld,\"asleep\":%lld,\"fire_hz\":%.4f,"
@@ -3542,6 +3551,7 @@ static void print_usage(const char* exe) {
         "    --port N               پورت داشبورد (پیش‌فرض 8420)\n"
         "    --seed N               بذر تصادفی (پیش‌فرض 12345)\n"
         "    --load FILE            بارگذاری چک‌پوینت مشخص (پیش‌فرض brain.dat)\n"
+        "    --autosave N           ذخیره‌ی خودکار هر N ثانیه‌ی مجازی (بند ۴۲)\n"
         "    --headless N           اجرای بدون داشبورد به مدت N ثانیه مجازی\n"
         "    --speed N              سرعت زمان مجازی در هزارم (1000 = بلادرنگ)\n"
         "    --no-browser           مرورگر را خودکار باز نکن\n"
@@ -3565,6 +3575,37 @@ static void print_usage(const char* exe) {
         exe, exe);
 }
 
+// --- بند ۴۲: شناسنامه‌ی تولد ----------------------------------------------
+//  مغز دائمی باید تاریخ و ساعت تولد داشته باشد. ساده‌ترین راه بدون شکستن
+//  قالب چک‌پوینت: فایل همراه brain.birth که فقط یک بار — در لحظه‌ی تولد —
+//  نوشته می‌شود و بعد از آن فقط خوانده.
+static void birth_record(bool fresh, u64 seed, size_t neurons) {
+    if (!g_birth_iso.empty()) return;
+    if (FILE* f = fopen("brain.birth", "rb")) {
+        char b[256] = {0};
+        size_t n = fread(b, 1, sizeof(b) - 1, f);
+        fclose(f);
+        std::string t(b, n);
+        size_t p = t.find("born=");
+        if (p != std::string::npos) {
+            size_t e = t.find('\n', p);
+            g_birth_iso = t.substr(p + 5, e == std::string::npos
+                                          ? std::string::npos : e - p - 5);
+        }
+        return;
+    }
+    char iso[32];
+    time_t now = time(nullptr);
+    strftime(iso, sizeof iso, "%Y-%m-%dT%H:%M:%S", localtime(&now));
+    g_birth_iso = iso;
+    if (FILE* f = fopen("brain.birth", "wb")) {
+        fprintf(f, "born=%s\nfresh=%d\nseed=%llu\nneurons=%zu\n",
+                iso, fresh ? 1 : 0, (unsigned long long)seed, neurons);
+        fclose(f);
+        printf("  شناسنامه‌ی تولد: brain.birth  (%s)\n", iso);
+    }
+}
+
 int main(int argc, char** argv) {
     console_utf8();
     int  N = 32000, port = 8420, headless_s = 0;
@@ -3580,6 +3621,7 @@ int main(int argc, char** argv) {
         else if (a == "--port")    port = atoi(nxt());
         else if (a == "--seed")    seed = (u64)atoll(nxt());
         else if (a == "--load")    loadf = nxt();
+        else if (a == "--autosave") g_autosave_s = atoi(nxt());   // بند ۴۲
         else if (a == "--headless")headless_s = atoi(nxt());
         else if (a == "--speed")   g_speed.store(atoi(nxt()));
         else if (a == "--no-browser") g_open_browser = false;
@@ -3657,6 +3699,12 @@ int main(int argc, char** argv) {
         printf("  یال‌ها   : %zu\n", edges);
         printf("  بذر     : %llu\n", (unsigned long long)seed);
     }
+    // «تازه» یعنی این اجرا تولد واقعی است: نه چک‌پوینتی ادامه یافته، نه مغزی
+    // از نو ساخته شده به‌خاطر ناسازگاری اندازه. مغزِ ادامه‌یافته شناسنامه‌ی
+    // قبلی خود را نگه می‌دارد.
+    bool continued = checkpoint_loaded
+                     && (B.n.size() == (size_t)N || B.pop_base == (i64)N);
+    birth_record(!continued, seed, B.n.size());
     printf("\n");
 
     std::thread srv;
