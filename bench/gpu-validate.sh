@@ -45,18 +45,20 @@ restore_service(){
 }
 trap restore_service EXIT
 
-# --- پیش‌نیاز GPU (قبل از صرف وقت روی بنچمارک CPU) ---
-if ! command -v nvidia-smi >/dev/null 2>&1; then
-  say "nvidia-smi نیست — درایور NVIDIA نصب نیست"
-  echo "  sudo ubuntu-drivers install && sudo reboot"
-  exit 1
-fi
-ND=$(nvidia-smi -L 2>/dev/null | wc -l)
-if [ "$ND" -eq 0 ]; then say "کارت NVIDIA دیده نمی‌شود"; exit 1; fi
-if ! command -v nvcc >/dev/null 2>&1; then
-  say "nvcc نیست — CUDA Toolkit نصب نیست"
-  echo "  sudo apt install -y nvidia-cuda-toolkit"
-  exit 1
+# --- پیش‌نیاز GPU (قبل از صرف وقت روی بنچمارک CPU؛ با CPU_ONLY نادیده گرفته می‌شود)
+if [ "${CPU_ONLY:-0}" != "1" ]; then
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    say "nvidia-smi نیست — درایور NVIDIA نصب نیست"
+    echo "  sudo ubuntu-drivers install && sudo reboot"
+    exit 1
+  fi
+  ND=$(nvidia-smi -L 2>/dev/null | wc -l)
+  if [ "$ND" -eq 0 ]; then say "کارت NVIDIA دیده نمی‌شود"; exit 1; fi
+  if ! command -v nvcc >/dev/null 2>&1; then
+    say "nvcc نیست — CUDA Toolkit نصب نیست"
+    echo "  sudo apt install -y nvidia-cuda-toolkit"
+    exit 1
+  fi
 fi
 
 # --- CPU: مرجع ------------------------------------------------------------
@@ -83,11 +85,13 @@ run_cpu(){   # $1=نخ (۰=خودکار) · $2=برچسب
       'BEGIN{printf "%-26s %8.1f×  (%.0fs wall)\n", tag, (ms>0 ? s*1000/ms : 0), ms/1000}'
 }
 
+if [ "${GPU_ONLY:-0}" != "1" ]; then
 say "مرجع CPU — $NEURONS نورون · $SECS ثانیه‌ی مجازی · فلگ‌های سرویس"
 run_cpu 1 "CPU · ۱ نخ"
 run_cpu 0 "CPU · همه‌ی نخ‌ها"
 
 if [ "$CPU_ONLY" = "1" ]; then say "تمام (CPU_ONLY=1)"; exit 0; fi
+fi   # end GPU_ONLY guard
 
 # --- GPU: هسته‌ی اعتبارسنجی ------------------------------------------------
 if [ -z "$ARCH" ]; then
@@ -101,8 +105,22 @@ if [ -z "$ARCH" ]; then
     *)     ARCH=sm_61; echo "[!] compute_cap=«$CC» خوانده نشد — sm_61 پیش‌فرض";;
   esac
 fi
-say "بیلد هسته‌ی اعتبارسنجی CUDA (-arch=$ARCH)"
-nvcc -O3 -std=c++17 -arch="$ARCH" smile_cuda.cu -o bench/smile-gpu || exit 1
+# nvcc 11.5 (ابونتو) حداکثر gcc 10 را می‌فهمد؛ gcc 11 خطای «parameter packs
+# not expanded» در <functional> می‌دهد. اگر میزبان gcc>10 است، g++-10 لازم است.
+HOSTCC=""
+GM=$(g++ --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.' | head -1 | tr -d .)
+if [ "${GM:-0}" -gt 10 ] 2>/dev/null; then
+  if command -v g++-10 >/dev/null 2>&1; then
+    HOSTCC="-ccbin g++-10"
+    say "gcc میزبان $GM است — بیلد CUDA با g++-10"
+  else
+    say "nvcc با g++ $GM سازگار نیست — g++-10 لازم است"
+    echo "  sudo apt install -y g++-10 gcc-10"
+    exit 1
+  fi
+fi
+say "بیلد هسته‌ی اعتبارسنجی CUDA (-arch=$ARCH $HOSTCC)"
+nvcc -O3 -std=c++17 $HOSTCC -arch="$ARCH" smile_cuda.cu -o bench/smile-gpu || exit 1
 
 ND=$(nvidia-smi -L 2>/dev/null | wc -l)
 say "اجرای اعتبارسنجی روی $ND کارت — هر کدام $SECS ثانیه‌ی واقعی"
